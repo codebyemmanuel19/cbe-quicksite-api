@@ -8,7 +8,7 @@ const { requireAuth } = require("../middleware/auth");
 const router = express.Router();
 const isProd = process.env.NODE_ENV === "production";
 
-// Only set a cookie domain once the API lives under cbequicksite.com.
+// Only set a cookie domains once the API lives under cbequicksite.com.
 // A server cannot set a cookie for a domain it does not answer from.
 const cookieDomain = process.env.COOKIE_DOMAIN || "";
 
