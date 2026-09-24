@@ -8,14 +8,18 @@ const { requireAuth } = require("../middleware/auth");
 const router = express.Router();
 const isProd = process.env.NODE_ENV === "production";
 
+// Only set a cookie domain once the API lives under cbequicksite.com.
+// A server cannot set a cookie for a domain it does not answer from.
+const cookieDomain = process.env.COOKIE_DOMAIN || "";
+
 // The token sits in a cookie that JavaScript cannot read, so it cannot be stolen from the page
 const cookieOptions = {
   httpOnly: true,
-  sameSite: "lax",
-  secure: isProd,
+  sameSite: isProd ? "none" : "lax", // "none" lets the dashboard and the API be on different addresses
+  secure: isProd, // "none" is only allowed over https
   path: "/",
   maxAge: 7 * 24 * 60 * 60 * 1000,
-  ...(isProd ? { domain: ".cbequicksite.com" } : {}),
+  ...(cookieDomain ? { domain: cookieDomain } : {}),
 };
 
 function signToken(user) {
