@@ -10,6 +10,7 @@ const TAGS = ["", "New", "Most loved", "Pre-order", "Limited", "Sale"];
 const MAX_PRODUCTS = 100;
 const MAX_PHOTOS = 4;
 const MAX_OPTIONS = 20;
+const MAX_VARIANTS = 10;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function getSiteId(userId) {
@@ -26,6 +27,7 @@ function shape(row) {
     photos: row.photos,
     sizes: row.sizes,
     colors: row.colors,
+    variants: row.variants || [],
     tag: row.tag,
     soldOut: row.sold_out,
     categoryId: row.category_id,
@@ -45,6 +47,31 @@ function cleanOptions(value) {
   return out;
 }
 
+// Lengths, bottle sizes, storage: each one carries its own price.
+// e.g. [{ label: "14 inch", price: 45000 }, { label: "18 inch", price: 65000 }]
+function cleanVariants(value) {
+  if (!Array.isArray(value)) return { value: [] };
+
+  const out = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+
+    const label = String(item.label || "").trim().replace(/\s+/g, " ").slice(0, 30);
+    if (!label) continue;
+    if (out.some((v) => v.label.toLowerCase() === label.toLowerCase())) continue;
+
+    const price = Number(item.price);
+    if (!Number.isInteger(price) || price < 0 || price > 100000000) {
+      return { error: `Enter a valid price for ${label}` };
+    }
+
+    out.push({ label, price });
+    if (out.length >= MAX_VARIANTS) break;
+  }
+
+  return { value: out };
+}
+
 // Only photos sitting in your own Cloudinary account are kept
 function cleanPhotos(value) {
   if (!Array.isArray(value)) return [];
@@ -60,6 +87,9 @@ async function readBody(body, siteId) {
   if (!Number.isInteger(price) || price < 0 || price > 100000000) {
     return { error: "Enter a valid price" };
   }
+
+  const variants = cleanVariants(body.variants);
+  if (variants.error) return { error: variants.error };
 
   let categoryId = body.categoryId ? String(body.categoryId) : null;
   if (categoryId) {
@@ -83,6 +113,7 @@ async function readBody(body, siteId) {
       photos: cleanPhotos(body.photos),
       sizes: cleanOptions(body.sizes),
       colors: cleanOptions(body.colors),
+      variants: variants.value,
     },
   };
 }
@@ -118,10 +149,22 @@ router.post("/", requireAuth, requireActive, async (req, res) => {
   const p = parsed.value;
 
   const { rows } = await db.query(
-    `INSERT INTO products (site_id, category_id, name, price, description, photos, sizes, colors, tag, sold_out)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `INSERT INTO products (site_id, category_id, name, price, description, photos, sizes, colors, variants, tag, sold_out)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)
      RETURNING *`,
-    [siteId, p.categoryId, p.name, p.price, p.description, p.photos, p.sizes, p.colors, p.tag, p.soldOut]
+    [
+      siteId,
+      p.categoryId,
+      p.name,
+      p.price,
+      p.description,
+      p.photos,
+      p.sizes,
+      p.colors,
+      JSON.stringify(p.variants),
+      p.tag,
+      p.soldOut,
+    ]
   );
 
   // The 7 free days start on the first product only. IS NULL makes sure it can never restart.
@@ -150,10 +193,23 @@ router.put("/:id", requireAuth, requireActive, async (req, res) => {
   const { rows } = await db.query(
     `UPDATE products
      SET category_id = $1, name = $2, price = $3, description = $4, photos = $5,
-         sizes = $6, colors = $7, tag = $8, sold_out = $9, updated_at = NOW()
-     WHERE id = $10 AND site_id = $11
+         sizes = $6, colors = $7, variants = $8::jsonb, tag = $9, sold_out = $10, updated_at = NOW()
+     WHERE id = $11 AND site_id = $12
      RETURNING *`,
-    [p.categoryId, p.name, p.price, p.description, p.photos, p.sizes, p.colors, p.tag, p.soldOut, req.params.id, siteId]
+    [
+      p.categoryId,
+      p.name,
+      p.price,
+      p.description,
+      p.photos,
+      p.sizes,
+      p.colors,
+      JSON.stringify(p.variants),
+      p.tag,
+      p.soldOut,
+      req.params.id,
+      siteId,
+    ]
   );
   if (!rows.length) return res.status(404).json({ error: "Product not found" });
 

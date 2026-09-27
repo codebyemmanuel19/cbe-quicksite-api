@@ -42,6 +42,7 @@ router.get("/shop/:slug", async (req, res) => {
       businessType: site.business_type,
       currency: site.currency,
       symbol: money.symbol,
+      dialCode: money.dialCode,
       businessName: site.business_name,
       heroLabel: site.hero_label,
       heroHeadline: site.hero_headline,
@@ -74,7 +75,7 @@ router.get("/shop/:slug/products", async (req, res) => {
   if (!site || isOffline(site)) return res.status(404).json({ error: "Shop not found" });
 
   const { rows } = await db.query(
-    `SELECT p.id, p.name, p.price, p.description, p.photos, p.sizes, p.colors,
+    `SELECT p.id, p.name, p.price, p.description, p.photos, p.sizes, p.colors, p.variants,
             p.tag, p.sold_out, p.category_id, c.name AS category_name
      FROM products p
      LEFT JOIN categories c ON c.id = p.category_id
@@ -92,6 +93,7 @@ router.get("/shop/:slug/products", async (req, res) => {
       photos: r.photos,
       sizes: r.sizes,
       colors: r.colors,
+      variants: r.variants || [],
       tag: r.tag,
       soldOut: r.sold_out,
       categoryId: r.category_id,

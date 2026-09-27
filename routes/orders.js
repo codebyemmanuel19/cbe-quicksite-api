@@ -120,7 +120,7 @@ router.post("/:slug", orderLimiter, async (req, res) => {
   if (!ids.length) return res.status(400).json({ error: "Your bag is empty" });
 
   const { rows: products } = await db.query(
-    "SELECT id, name, price, sizes, colors, sold_out FROM products WHERE site_id = $1 AND id = ANY($2::uuid[])",
+    "SELECT id, name, price, sizes, colors, variants, sold_out FROM products WHERE site_id = $1 AND id = ANY($2::uuid[])",
     [site.id, ids]
   );
 
@@ -143,8 +143,25 @@ router.post("/:slug", orderLimiter, async (req, res) => {
     if (color && !product.colors.includes(color)) return res.status(400).json({ error: `Choose a colour for ${product.name}` });
     if (!color && product.colors.length) return res.status(400).json({ error: `Choose a colour for ${product.name}` });
 
-    subtotal += product.price * qty; // the shop's price, not the browser's
-    items.push({ productId: product.id, name: product.name, price: product.price, qty, size, color });
+    // Lengths, bottle sizes, storage. The price comes from the shop's own list,
+    // so a customer cannot pick 22 inch and pay the 14 inch price.
+    const options = product.variants || [];
+    let variant = "";
+    let price = product.price;
+
+    if (options.length) {
+      const wanted = text(raw.variant, 30);
+      if (!wanted) return res.status(400).json({ error: `Choose an option for ${product.name}` });
+
+      const chosen = options.find((v) => String(v.label).toLowerCase() === wanted.toLowerCase());
+      if (!chosen) return res.status(400).json({ error: `Choose an option for ${product.name}` });
+
+      variant = chosen.label;
+      price = chosen.price;
+    }
+
+    subtotal += price * qty; // the shop's price, not the browser's
+    items.push({ productId: product.id, name: product.name, price, qty, size, color, variant });
   }
 
   const total = subtotal + (fee || 0);
