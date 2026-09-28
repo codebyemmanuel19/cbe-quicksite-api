@@ -53,4 +53,26 @@ function resetEmail(link) {
   `;
 }
 
-module.exports = { send, resetEmail };
+// Sent the moment someone signs up
+function verifyEmail(link) {
+  return `
+    <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#111">
+      <h1 style="font-size:20px;margin:0 0 16px">Confirm your email</h1>
+      <p style="font-size:15px;line-height:1.6;color:#444;margin:0 0 24px">
+        Welcome to CBE QuickSite. Tap the button below so we know this email is really yours.
+        That way you can always get back into your account.
+      </p>
+      <a href="${link}"
+         style="display:inline-block;padding:14px 28px;background:#1d4ed8;color:#fff;
+                text-decoration:none;border-radius:8px;font-size:15px;font-weight:600">
+        Confirm my email
+      </a>
+      <p style="font-size:13px;line-height:1.6;color:#777;margin:24px 0 0">
+        This link expires in 24 hours. If you did not create an account, you can ignore this email.
+      </p>
+      <p style="font-size:12px;color:#999;margin:24px 0 0">CBE QuickSite</p>
+    </div>
+  `;
+}
+
+module.exports = { send, resetEmail, verifyEmail };

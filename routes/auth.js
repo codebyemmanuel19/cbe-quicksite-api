@@ -5,7 +5,7 @@ const jwt = require("jsonwebtoken");
 const rateLimit = require("express-rate-limit");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
-const { send, resetEmail } = require("../mail");
+const { send, resetEmail, verifyEmail } = require("../mail");
 
 const router = express.Router();
 const isProd = process.env.NODE_ENV === "production";
@@ -35,6 +35,31 @@ function firstClientUrl() {
   return (process.env.CLIENT_URL || "http://localhost:3000").split(",")[0].trim();
 }
 
+// Makes a fresh confirm link and emails it. Used at signup and by "send it again".
+async function sendVerification(userId, email) {
+  // Only one live link at a time
+  await db.query(
+    "UPDATE email_verifications SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL",
+    [userId]
+  );
+
+  const token = crypto.randomBytes(32).toString("hex");
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+
+  await db.query(
+    `INSERT INTO email_verifications (user_id, token_hash, expires_at)
+     VALUES ($1, $2, NOW() + INTERVAL '24 hours')`,
+    [userId, tokenHash]
+  );
+
+  const link = `${firstClientUrl()}/verify-email?token=${token}`;
+  return send({
+    to: email,
+    subject: "Confirm your email - CBE QuickSite",
+    html: verifyEmail(link),
+  });
+}
+
 // Slows down anyone guessing passwords over and over
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -44,7 +69,7 @@ const authLimiter = rateLimit({
   message: { error: "Too many attempts. Try again in 15 minutes." },
 });
 
-// Stricter: stops someone flooding a vendor's inbox with reset emails
+// Stricter: stops someone flooding a vendor's inbox with emails
 const resetLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 5,
@@ -74,6 +99,13 @@ router.post("/signup", authLimiter, async (req, res) => {
     const user = rows[0];
     res.cookie("token", signToken(user), cookieOptions);
     res.status(201).json({ user });
+
+    // After the reply, so a slow mail server never holds up signup.
+    // They are signed in either way and can ask for the email again.
+    console.log("About to send verification to:", user.email);
+    sendVerification(user.id, user.email)
+      .then((r) => console.log("Verification send result:", r))
+      .catch((err) => console.error("Verification email failed:", err.message));
   } catch (err) {
     if (err.code === "23505") {
       return res.status(409).json({ error: "That email already has an account" });
@@ -182,6 +214,11 @@ router.post("/reset-password", authLimiter, async (req, res) => {
     await client.query("BEGIN");
     await client.query("UPDATE users SET password_hash = $1 WHERE id = $2", [hash, reset.user_id]);
     await client.query("UPDATE password_resets SET used_at = NOW() WHERE id = $1", [reset.id]);
+    // Getting into the inbox proves the address is real
+    await client.query(
+      "UPDATE users SET email_verified_at = NOW() WHERE id = $1 AND email_verified_at IS NULL",
+      [reset.user_id]
+    );
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK");
@@ -196,10 +233,67 @@ router.post("/reset-password", authLimiter, async (req, res) => {
   res.json({ user });
 });
 
+// They clicked the confirm link in their email
+router.post("/verify-email", authLimiter, async (req, res) => {
+  const token = String(req.body.token || "").trim();
+
+  if (!/^[a-f0-9]{64}$/i.test(token)) {
+    return res.status(400).json({ error: "This link is no longer valid. Please ask for a new one." });
+  }
+
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+
+  const { rows } = await db.query(
+    `SELECT ev.id, ev.user_id, u.email, u.role
+     FROM email_verifications ev
+     JOIN users u ON u.id = ev.user_id
+     WHERE ev.token_hash = $1 AND ev.used_at IS NULL AND ev.expires_at > NOW()`,
+    [tokenHash]
+  );
+  if (!rows.length) {
+    return res.status(400).json({ error: "This link is no longer valid. Please ask for a new one." });
+  }
+
+  const row = rows[0];
+
+  const client = await db.pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("UPDATE users SET email_verified_at = NOW() WHERE id = $1", [row.user_id]);
+    await client.query("UPDATE email_verifications SET used_at = NOW() WHERE id = $1", [row.id]);
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  // Sign them in, in case they opened the link on a different phone
+  const user = { id: row.user_id, email: row.email, role: row.role };
+  res.cookie("token", signToken(user), cookieOptions);
+  res.json({ user });
+});
+
+// "Send it again" on the dashboard banner
+router.post("/resend-verification", resetLimiter, requireAuth, async (req, res) => {
+  const { rows } = await db.query(
+    "SELECT id, email, email_verified_at FROM users WHERE id = $1",
+    [req.user.id]
+  );
+  const user = rows[0];
+  if (!user) return res.status(401).json({ error: "Not signed in" });
+  if (user.email_verified_at) return res.json({ ok: true, alreadyVerified: true });
+
+  await sendVerification(user.id, user.email);
+  res.json({ ok: true });
+});
+
 // The dashboard calls this on every load to know who is signed in
 router.get("/me", requireAuth, async (req, res) => {
   const { rows } = await db.query(
-    `SELECT u.id, u.email, u.role, s.id AS site_id, s.slug, s.business_name, s.business_type
+    `SELECT u.id, u.email, u.role, u.email_verified_at,
+            s.id AS site_id, s.slug, s.business_name, s.business_type
      FROM users u
      LEFT JOIN sites s ON s.user_id = u.id
      WHERE u.id = $1`,
@@ -210,7 +304,12 @@ router.get("/me", requireAuth, async (req, res) => {
   if (!r) return res.status(401).json({ error: "Not signed in" });
 
   res.json({
-    user: { id: r.id, email: r.email, role: r.role },
+    user: {
+      id: r.id,
+      email: r.email,
+      role: r.role,
+      emailVerified: !!r.email_verified_at,
+    },
     site: r.site_id
       ? { id: r.site_id, slug: r.slug, businessName: r.business_name, businessType: r.business_type }
       : null,
