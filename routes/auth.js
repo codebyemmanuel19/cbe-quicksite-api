@@ -102,10 +102,9 @@ router.post("/signup", authLimiter, async (req, res) => {
 
     // After the reply, so a slow mail server never holds up signup.
     // They are signed in either way and can ask for the email again.
-    console.log("About to send verification to:", user.email);
-    sendVerification(user.id, user.email)
-      .then((r) => console.log("Verification send result:", r))
-      .catch((err) => console.error("Verification email failed:", err.message));
+    sendVerification(user.id, user.email).catch((err) =>
+      console.error("Verification email failed:", err.message)
+    );
   } catch (err) {
     if (err.code === "23505") {
       return res.status(409).json({ error: "That email already has an account" });
@@ -289,10 +288,20 @@ router.post("/resend-verification", resetLimiter, requireAuth, async (req, res) 
   res.json({ ok: true });
 });
 
+// The dashboard tells us when it is running from the home screen instead of
+// a browser tab, so we know who has installed it and who still needs a nudge.
+router.post("/installed", requireAuth, async (req, res) => {
+  await db.query(
+    "UPDATE users SET installed_at = NOW() WHERE id = $1 AND installed_at IS NULL",
+    [req.user.id]
+  );
+  res.json({ ok: true });
+});
+
 // The dashboard calls this on every load to know who is signed in
 router.get("/me", requireAuth, async (req, res) => {
   const { rows } = await db.query(
-    `SELECT u.id, u.email, u.role, u.email_verified_at,
+    `SELECT u.id, u.email, u.role, u.email_verified_at, u.installed_at,
             s.id AS site_id, s.slug, s.business_name, s.business_type
      FROM users u
      LEFT JOIN sites s ON s.user_id = u.id
@@ -309,6 +318,7 @@ router.get("/me", requireAuth, async (req, res) => {
       email: r.email,
       role: r.role,
       emailVerified: !!r.email_verified_at,
+      installed: !!r.installed_at,
     },
     site: r.site_id
       ? { id: r.site_id, slug: r.slug, businessName: r.business_name, businessType: r.business_type }
