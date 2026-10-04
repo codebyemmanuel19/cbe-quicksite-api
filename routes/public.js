@@ -1,4 +1,5 @@
 const express = require("express");
+const rateLimit = require("express-rate-limit");
 const db = require("../db");
 const { COUNTRIES } = require("../countries");
 
@@ -100,6 +101,76 @@ router.get("/shop/:slug/products", async (req, res) => {
       category: r.category_name || "",
     })),
   });
+});
+
+// ---- Real estate ----
+
+// Everything an agent has listed. Same offline rules as the shops.
+router.get("/shop/:slug/properties", async (req, res) => {
+  const site = await loadBySlug(req.params.slug);
+  if (!site || isOffline(site)) return res.status(404).json({ error: "Shop not found" });
+
+  const { rows } = await db.query(
+    `SELECT id, title, price, location, type, listing, status,
+            bedrooms, bathrooms, size, description, photos, features
+     FROM properties
+     WHERE site_id = $1
+     ORDER BY created_at DESC`,
+    [site.id]
+  );
+
+  res.json({
+    properties: rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      // price is BIGINT, so Postgres hands it back as text
+      price: Number(r.price),
+      location: r.location,
+      type: r.type,
+      listing: r.listing,
+      status: r.status,
+      bedrooms: r.bedrooms,
+      bathrooms: r.bathrooms,
+      size: r.size,
+      description: r.description,
+      photos: r.photos,
+      features: r.features,
+    })),
+  });
+});
+
+// Stops one visitor filling the agent's inquiry list
+const inquiryLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests. Try again later." },
+});
+
+// A visitor tapped "Ask the agent on WhatsApp". We note it so the agent sees interest.
+router.post("/shop/:slug/inquiries", inquiryLimiter, async (req, res) => {
+  const site = await loadBySlug(req.params.slug);
+  if (!site || isOffline(site)) return res.status(404).json({ error: "Shop not found" });
+
+  const propertyId = String(req.body.propertyId || "");
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(propertyId)) {
+    return res.status(400).json({ error: "Property not found" });
+  }
+
+  // The title is taken from the database, never from the browser, so nobody can post junk
+  const { rows: found } = await db.query(
+    "SELECT title FROM properties WHERE id = $1 AND site_id = $2",
+    [propertyId, site.id]
+  );
+  if (!found.length) return res.status(404).json({ error: "Property not found" });
+
+  await db.query(
+    "INSERT INTO inquiries (site_id, property_id, property_title) VALUES ($1, $2, $3)",
+    [site.id, propertyId, found[0].title]
+  );
+
+  res.status(201).json({ ok: true });
 });
 
 module.exports = router;

@@ -47,6 +47,8 @@ app.get("/health", async (req, res) => {
   }
 });
 
+app.use("/properties", require("./routes/properties"));
+
 // Signup, login, logout, who am I
 app.use("/auth", require("./routes/auth"));
 

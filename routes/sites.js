@@ -8,7 +8,7 @@ const { COUNTRIES } = require("../countries");
 const router = express.Router();
 
 const RESERVED = ["www", "app", "api", "admin", "dashboard", "mail", "support", "login", "signup"];
-const TYPES = ["clothing", "hair", "skincare", "perfume", "jewellery", "gadgets"];
+const TYPES = ["clothing", "hair", "skincare", "perfume", "jewellery", "gadgets", "realestate"];
 const MAX_AREAS = 30;
 
 function cleanSlug(value) {

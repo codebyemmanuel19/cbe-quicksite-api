@@ -9,8 +9,9 @@ const router = express.Router();
 const TYPES = ["House", "Flat", "Land"];
 const LISTINGS = ["Sale", "Rent"];
 const STATUSES = ["Available", "Sold", "Rented"];
+const INQUIRY_STATUSES = ["new", "contacted", "closed"];
 const MAX_PROPERTIES = 100;
-const MAX_PHOTOS = 4;
+const MAX_PHOTOS = 8;
 const MAX_FEATURES = 12;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -116,6 +117,70 @@ router.get("/", requireAuth, async (req, res) => {
   res.json({ properties: rows.map(shape) });
 });
 
+// These two sit above "/:id" so the word "inquiries" is never read as an id
+router.get("/inquiries/all", requireAuth, async (req, res) => {
+  const siteId = await getSiteId(req.user.id);
+  if (!siteId) return res.status(400).json({ error: "Set up your website first" });
+
+  const { rows } = await db.query(
+    `SELECT i.id, i.property_id, i.property_title, i.status, i.created_at, p.location, p.price
+     FROM inquiries i
+     LEFT JOIN properties p ON p.id = i.property_id
+     WHERE i.site_id = $1
+     ORDER BY i.created_at DESC
+     LIMIT 200`,
+    [siteId]
+  );
+
+  res.json({
+    inquiries: rows.map((r) => ({
+      id: r.id,
+      propertyId: r.property_id,
+      propertyTitle: r.property_title,
+      status: r.status,
+      location: r.location || "",
+      price: r.price === null ? null : Number(r.price),
+      createdAt: r.created_at,
+    })),
+  });
+});
+
+// The agent marks a lead as contacted or closed. Not blocked when the trial ends,
+// because this is their own record keeping, not editing the website.
+router.put("/inquiries/:id", requireAuth, async (req, res) => {
+  if (!UUID.test(req.params.id)) return res.status(404).json({ error: "Inquiry not found" });
+
+  const status = String(req.body.status || "");
+  if (!INQUIRY_STATUSES.includes(status)) return res.status(400).json({ error: "Choose a valid status" });
+
+  const siteId = await getSiteId(req.user.id);
+  if (!siteId) return res.status(400).json({ error: "Set up your website first" });
+
+  const { rowCount } = await db.query(
+    "UPDATE inquiries SET status = $1 WHERE id = $2 AND site_id = $3",
+    [status, req.params.id, siteId]
+  );
+  if (!rowCount) return res.status(404).json({ error: "Inquiry not found" });
+
+  res.json({ ok: true });
+});
+
+// The Edit page loads one property with this
+router.get("/:id", requireAuth, async (req, res) => {
+  if (!UUID.test(req.params.id)) return res.status(404).json({ error: "Property not found" });
+
+  const siteId = await getSiteId(req.user.id);
+  if (!siteId) return res.status(400).json({ error: "Set up your website first" });
+
+  const { rows } = await db.query("SELECT * FROM properties WHERE id = $1 AND site_id = $2", [
+    req.params.id,
+    siteId,
+  ]);
+  if (!rows.length) return res.status(404).json({ error: "Property not found" });
+
+  res.json({ property: shape(rows[0]) });
+});
+
 router.post("/", requireAuth, requireActive, async (req, res) => {
   const siteId = req.site.id;
 
@@ -217,33 +282,6 @@ router.delete("/:id", requireAuth, requireActive, async (req, res) => {
   if (!rowCount) return res.status(404).json({ error: "Property not found" });
 
   res.json({ ok: true });
-});
-
-// The agent's inquiry list: who tapped WhatsApp, and on which property
-router.get("/inquiries/all", requireAuth, async (req, res) => {
-  const siteId = await getSiteId(req.user.id);
-  if (!siteId) return res.status(400).json({ error: "Set up your website first" });
-
-  const { rows } = await db.query(
-    `SELECT i.id, i.property_id, i.property_title, i.created_at, p.location, p.price
-     FROM inquiries i
-     LEFT JOIN properties p ON p.id = i.property_id
-     WHERE i.site_id = $1
-     ORDER BY i.created_at DESC
-     LIMIT 200`,
-    [siteId]
-  );
-
-  res.json({
-    inquiries: rows.map((r) => ({
-      id: r.id,
-      propertyId: r.property_id,
-      propertyTitle: r.property_title,
-      location: r.location || "",
-      price: r.price === null ? null : Number(r.price),
-      createdAt: r.created_at,
-    })),
-  });
 });
 
 module.exports = router;
