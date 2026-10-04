@@ -6,12 +6,11 @@ const { isOurImage } = require("../images");
 
 const router = express.Router();
 
-const TYPES = ["House", "Flat", "Land"];
-const LISTINGS = ["Sale", "Rent"];
-const STATUSES = ["Available", "Sold", "Rented"];
-const MAX_PROPERTIES = 100;
+const TAGS = ["", "New", "Most loved", "Pre-order", "Limited", "Sale"];
+const MAX_PRODUCTS = 100;
 const MAX_PHOTOS = 4;
-const MAX_FEATURES = 12;
+const MAX_OPTIONS = 20;
+const MAX_VARIANTS = 10;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function getSiteId(userId) {
@@ -22,21 +21,55 @@ async function getSiteId(userId) {
 function shape(row) {
   return {
     id: row.id,
-    title: row.title,
-    // BIGINT comes back from Postgres as text, so turn it into a real number
-    price: Number(row.price),
-    location: row.location,
-    type: row.type,
-    listing: row.listing,
-    status: row.status,
-    bedrooms: row.bedrooms,
-    bathrooms: row.bathrooms,
-    size: row.size,
+    name: row.name,
+    price: row.price,
     description: row.description,
     photos: row.photos,
-    features: row.features,
+    sizes: row.sizes,
+    colors: row.colors,
+    variants: row.variants || [],
+    tag: row.tag,
+    soldOut: row.sold_out,
+    categoryId: row.category_id,
+    category: row.category_name || "",
     createdAt: row.created_at,
   };
+}
+
+function cleanOptions(value) {
+  if (!Array.isArray(value)) return [];
+  const out = [];
+  for (const item of value) {
+    const text = String(item || "").trim().slice(0, 20);
+    if (text && !out.includes(text)) out.push(text);
+    if (out.length >= MAX_OPTIONS) break;
+  }
+  return out;
+}
+
+// Lengths, bottle sizes, storage: each one carries its own price.
+// e.g. [{ label: "14 inch", price: 45000 }, { label: "18 inch", price: 65000 }]
+function cleanVariants(value) {
+  if (!Array.isArray(value)) return { value: [] };
+
+  const out = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+
+    const label = String(item.label || "").trim().replace(/\s+/g, " ").slice(0, 30);
+    if (!label) continue;
+    if (out.some((v) => v.label.toLowerCase() === label.toLowerCase())) continue;
+
+    const price = Number(item.price);
+    if (!Number.isInteger(price) || price < 0 || price > 100000000) {
+      return { error: `Enter a valid price for ${label}` };
+    }
+
+    out.push({ label, price });
+    if (out.length >= MAX_VARIANTS) break;
+  }
+
+  return { value: out };
 }
 
 // Only photos sitting in your own Cloudinary account are kept
@@ -45,116 +78,96 @@ function cleanPhotos(value) {
   return value.map((p) => String(p || "").trim()).filter(isOurImage).slice(0, MAX_PHOTOS);
 }
 
-// "Borehole", "Fenced", "C of O" and so on
-function cleanFeatures(value) {
-  if (!Array.isArray(value)) return [];
-  const out = [];
-  for (const item of value) {
-    const text = String(item || "").trim().replace(/\s+/g, " ").slice(0, 30);
-    if (text && !out.includes(text)) out.push(text);
-    if (out.length >= MAX_FEATURES) break;
-  }
-  return out;
-}
-
-// Land has no bedrooms, so empty is allowed. Returns null for empty, false for rubbish.
-function toCount(value) {
-  if (value === "" || value === null || value === undefined) return null;
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < 0 || n > 50) return false;
-  return n;
-}
-
 // Checks and cleans everything the browser sent, before it touches the database
-function readBody(body) {
-  const title = String(body.title || "").trim().replace(/\s+/g, " ");
-  if (title.length < 2 || title.length > 100) {
-    return { error: "Property title must be 2 to 100 characters" };
-  }
+async function readBody(body, siteId) {
+  const name = String(body.name || "").trim().replace(/\s+/g, " ");
+  if (name.length < 2 || name.length > 80) return { error: "Product name must be 2 to 80 characters" };
 
   const price = Number(body.price);
-  if (!Number.isInteger(price) || price < 0 || price > 100000000000) {
+  if (!Number.isInteger(price) || price < 0 || price > 100000000) {
     return { error: "Enter a valid price" };
   }
 
-  const location = String(body.location || "").trim().replace(/\s+/g, " ").slice(0, 120);
-  if (!location) return { error: "Enter where the property is" };
+  const variants = cleanVariants(body.variants);
+  if (variants.error) return { error: variants.error };
 
-  const bedrooms = toCount(body.bedrooms);
-  if (bedrooms === false) return { error: "Enter a valid number of bedrooms" };
-
-  const bathrooms = toCount(body.bathrooms);
-  if (bathrooms === false) return { error: "Enter a valid number of bathrooms" };
+  let categoryId = body.categoryId ? String(body.categoryId) : null;
+  if (categoryId) {
+    if (!UUID.test(categoryId)) return { error: "Choose a valid category" };
+    // The category must belong to this same shop
+    const { rows } = await db.query("SELECT 1 FROM categories WHERE id = $1 AND site_id = $2", [
+      categoryId,
+      siteId,
+    ]);
+    if (!rows.length) return { error: "Choose a valid category" };
+  }
 
   return {
     value: {
-      title,
+      name,
       price,
-      location,
-      // Anything the form didn't send falls back to a safe value the website understands
-      type: TYPES.includes(body.type) ? body.type : "House",
-      listing: LISTINGS.includes(body.listing) ? body.listing : "Sale",
-      status: STATUSES.includes(body.status) ? body.status : "Available",
-      bedrooms,
-      bathrooms,
-      size: String(body.size || "").trim().slice(0, 40),
-      description: String(body.description || "").trim().slice(0, 1500),
+      categoryId,
+      description: String(body.description || "").trim().slice(0, 1000),
+      tag: TAGS.includes(body.tag) ? body.tag : "",
+      soldOut: body.soldOut === true,
       photos: cleanPhotos(body.photos),
-      features: cleanFeatures(body.features),
+      sizes: cleanOptions(body.sizes),
+      colors: cleanOptions(body.colors),
+      variants: variants.value,
     },
   };
 }
 
 router.get("/", requireAuth, async (req, res) => {
   const siteId = await getSiteId(req.user.id);
-  if (!siteId) return res.status(400).json({ error: "Set up your website first" });
+  if (!siteId) return res.status(400).json({ error: "Set up your shop first" });
 
   const { rows } = await db.query(
-    "SELECT * FROM properties WHERE site_id = $1 ORDER BY created_at DESC",
+    `SELECT p.*, c.name AS category_name
+     FROM products p
+     LEFT JOIN categories c ON c.id = p.category_id
+     WHERE p.site_id = $1
+     ORDER BY p.created_at DESC`,
     [siteId]
   );
-  res.json({ properties: rows.map(shape) });
+  res.json({ products: rows.map(shape) });
 });
 
 router.post("/", requireAuth, requireActive, async (req, res) => {
   const siteId = req.site.id;
 
   const { rows: countRows } = await db.query(
-    "SELECT COUNT(*)::int AS total FROM properties WHERE site_id = $1",
+    "SELECT COUNT(*)::int AS total FROM products WHERE site_id = $1",
     [siteId]
   );
-  if (countRows[0].total >= MAX_PROPERTIES) {
-    return res.status(400).json({ error: `You have reached ${MAX_PROPERTIES} properties` });
+  if (countRows[0].total >= MAX_PRODUCTS) {
+    return res.status(400).json({ error: `You have reached ${MAX_PRODUCTS} products` });
   }
 
-  const parsed = readBody(req.body);
+  const parsed = await readBody(req.body, siteId);
   if (parsed.error) return res.status(400).json({ error: parsed.error });
   const p = parsed.value;
 
   const { rows } = await db.query(
-    `INSERT INTO properties
-       (site_id, title, price, location, type, listing, status,
-        bedrooms, bathrooms, size, description, photos, features)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    `INSERT INTO products (site_id, category_id, name, price, description, photos, sizes, colors, variants, tag, sold_out)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)
      RETURNING *`,
     [
       siteId,
-      p.title,
+      p.categoryId,
+      p.name,
       p.price,
-      p.location,
-      p.type,
-      p.listing,
-      p.status,
-      p.bedrooms,
-      p.bathrooms,
-      p.size,
       p.description,
       p.photos,
-      p.features,
+      p.sizes,
+      p.colors,
+      JSON.stringify(p.variants),
+      p.tag,
+      p.soldOut,
     ]
   );
 
-  // The 7 free days start on the first property only. IS NULL makes sure it can never restart.
+  // The 7 free days start on the first product only. IS NULL makes sure it can never restart.
   const { rows: trialRows } = await db.query(
     `UPDATE sites SET trial_ends_at = NOW() + INTERVAL '7 days'
      WHERE id = $1 AND trial_ends_at IS NULL
@@ -163,87 +176,57 @@ router.post("/", requireAuth, requireActive, async (req, res) => {
   );
 
   res.status(201).json({
-    property: shape(rows[0]),
+    product: shape(rows[0]),
     trialStartedAt: trialRows.length ? trialRows[0].trial_ends_at : null,
   });
 });
 
 router.put("/:id", requireAuth, requireActive, async (req, res) => {
   const siteId = req.site.id;
-  if (!UUID.test(req.params.id)) return res.status(404).json({ error: "Property not found" });
+  if (!UUID.test(req.params.id)) return res.status(404).json({ error: "Product not found" });
 
-  const parsed = readBody(req.body);
+  const parsed = await readBody(req.body, siteId);
   if (parsed.error) return res.status(400).json({ error: parsed.error });
   const p = parsed.value;
 
-  // site_id in the WHERE is what stops one agent editing another agent's property
+  // site_id in the WHERE is what stops one vendor editing another vendor's product
   const { rows } = await db.query(
-    `UPDATE properties
-     SET title = $1, price = $2, location = $3, type = $4, listing = $5, status = $6,
-         bedrooms = $7, bathrooms = $8, size = $9, description = $10,
-         photos = $11, features = $12, updated_at = NOW()
-     WHERE id = $13 AND site_id = $14
+    `UPDATE products
+     SET category_id = $1, name = $2, price = $3, description = $4, photos = $5,
+         sizes = $6, colors = $7, variants = $8::jsonb, tag = $9, sold_out = $10, updated_at = NOW()
+     WHERE id = $11 AND site_id = $12
      RETURNING *`,
     [
-      p.title,
+      p.categoryId,
+      p.name,
       p.price,
-      p.location,
-      p.type,
-      p.listing,
-      p.status,
-      p.bedrooms,
-      p.bathrooms,
-      p.size,
       p.description,
       p.photos,
-      p.features,
+      p.sizes,
+      p.colors,
+      JSON.stringify(p.variants),
+      p.tag,
+      p.soldOut,
       req.params.id,
       siteId,
     ]
   );
-  if (!rows.length) return res.status(404).json({ error: "Property not found" });
+  if (!rows.length) return res.status(404).json({ error: "Product not found" });
 
-  res.json({ property: shape(rows[0]) });
+  res.json({ product: shape(rows[0]) });
 });
 
 router.delete("/:id", requireAuth, requireActive, async (req, res) => {
   const siteId = req.site.id;
-  if (!UUID.test(req.params.id)) return res.status(404).json({ error: "Property not found" });
+  if (!UUID.test(req.params.id)) return res.status(404).json({ error: "Product not found" });
 
-  const { rowCount } = await db.query("DELETE FROM properties WHERE id = $1 AND site_id = $2", [
+  const { rowCount } = await db.query("DELETE FROM products WHERE id = $1 AND site_id = $2", [
     req.params.id,
     siteId,
   ]);
-  if (!rowCount) return res.status(404).json({ error: "Property not found" });
+  if (!rowCount) return res.status(404).json({ error: "Product not found" });
 
   res.json({ ok: true });
-});
-
-// The agent's inquiry list: who tapped WhatsApp, and on which property
-router.get("/inquiries/all", requireAuth, async (req, res) => {
-  const siteId = await getSiteId(req.user.id);
-  if (!siteId) return res.status(400).json({ error: "Set up your website first" });
-
-  const { rows } = await db.query(
-    `SELECT i.id, i.property_id, i.property_title, i.created_at, p.location, p.price
-     FROM inquiries i
-     LEFT JOIN properties p ON p.id = i.property_id
-     WHERE i.site_id = $1
-     ORDER BY i.created_at DESC
-     LIMIT 200`,
-    [siteId]
-  );
-
-  res.json({
-    inquiries: rows.map((r) => ({
-      id: r.id,
-      propertyId: r.property_id,
-      propertyTitle: r.property_title,
-      location: r.location || "",
-      price: r.price === null ? null : Number(r.price),
-      createdAt: r.created_at,
-    })),
-  });
 });
 
 module.exports = router;
