@@ -3,7 +3,7 @@ const crypto = require("crypto");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
 const { billingStatus } = require("../middleware/locked");
-const { PLANS } = require("../plans");
+const { PLANS, plansFor } = require("../plans");
 const { creditPayment } = require("../credit");
 
 const router = express.Router();
@@ -28,7 +28,7 @@ function daysLeft(site) {
   return Math.max(0, Math.ceil((new Date(end).getTime() - Date.now()) / 86400000));
 }
 
-// The browser reads prices from here. It never sends an amount.
+// Nobody is signed in here, so this shows the shop prices
 router.get("/plans", (req, res) => {
   res.json({ plans: Object.values(PLANS) });
 });
@@ -50,18 +50,20 @@ router.get("/status", requireAuth, async (req, res) => {
       trialEndsAt: site.trial_ends_at,
       paidUntil: site.paid_until,
     },
-    plans: Object.values(PLANS),
+    // The price depends on the kind of business, so the shop has to be loaded first
+    plans: Object.values(plansFor(site.business_type)),
     history,
   });
 });
 
 router.post("/initialize", requireAuth, async (req, res) => {
-  const plan = PLANS[String(req.body.plan || "")];
-  if (!plan) return res.status(400).json({ error: "Choose a plan" });
-
   const site = await loadSite(req.user.id);
   if (!site) return res.status(400).json({ error: "Set up your shop first" });
   if (site.is_suspended) return res.status(403).json({ error: "This account is on hold. Please contact support." });
+
+  // Looked up after the shop, so a real estate agent is charged the real estate price
+  const plan = plansFor(site.business_type)[String(req.body.plan || "")];
+  if (!plan) return res.status(400).json({ error: "Choose a plan" });
 
   if (!secretKey()) {
     console.error("PAYSTACK_SECRET_KEY is missing from .env");
