@@ -1,9 +1,14 @@
 const db = require("./db");
 const { PLANS } = require("./plans");
 
+// Same cleaning as routes/billing.js: a stray space or quote mark in .env breaks the header
+function secretKey() {
+  return String(process.env.PAYSTACK_SECRET_KEY || "").trim().replace(/^["']|["']$/g, "");
+}
+
 async function askPaystack(reference) {
   const res = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
-    headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` },
+    headers: { Authorization: `Bearer ${secretKey()}` },
   });
   const body = await res.json();
   return body && body.data ? body.data : null;
@@ -31,14 +36,19 @@ async function creditPayment(reference) {
       return { ok: true, alreadyDone: true };
     }
 
+    // The days for 1, 3, 6 and 12 months are the same for every business type.
+    // The amount is not, so it is NOT taken from here.
     const plan = Object.values(PLANS).find((p) => p.months === payment.months);
     if (!plan) {
       await client.query("ROLLBACK");
       return { ok: false, error: "Unknown plan" };
     }
 
-    // What Paystack actually collected must match our own price, in kobo
-    if (Number(data.amount) !== plan.amount * 100 || String(data.currency) !== payment.currency) {
+    // The price was worked out by our server when the payment started, and saved with it.
+    // That price already depends on the business type (shops vs real estate).
+    // What Paystack actually collected must match it, in kobo.
+    const expected = Math.round(Number(payment.amount) * 100);
+    if (Number(data.amount) !== expected || String(data.currency) !== payment.currency) {
       await client.query("UPDATE payments SET status = 'failed', verified_at = NOW() WHERE id = $1", [payment.id]);
       await client.query("COMMIT");
       return { ok: false, error: "Amount does not match the plan" };
