@@ -70,6 +70,9 @@ app.use("/billing", require("./routes/billing"));
 
 app.use("/uploads", require("./routes/uploads"));
 
+// Daily reminder emails, called by cron-job.org
+app.use("/cron", require("./routes/cron"));
+
 app.use((req, res) => res.status(404).json({ error: "Not found" }));
 
 app.use((err, req, res, next) => {

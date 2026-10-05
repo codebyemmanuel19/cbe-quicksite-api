@@ -32,6 +32,15 @@ async function send({ to, subject, html }) {
   }
 }
 
+// Business names come from users, so never put them into HTML as they are
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 // Plain, short and mobile-friendly. Long HTML emails land in spam.
 function resetEmail(link) {
   return `
@@ -75,4 +84,38 @@ function verifyEmail(link) {
   `;
 }
 
-module.exports = { send, resetEmail, verifyEmail };
+// Sent when a plan or free trial is about to end
+function reminderEmail({ name, kind, daysLeft, orders, total, symbol, link }) {
+  const what = kind === "plan" ? "plan" : "free trial";
+  const word = daysLeft === 1 ? "day" : "days";
+
+  const stats =
+    orders > 0
+      ? `Your website got <b>${orders} ${orders === 1 ? "order" : "orders"}</b> worth
+         <b>${escapeHtml(symbol)}${Number(total).toLocaleString("en-US")}</b> in the last 30 days.
+         Keep it going.`
+      : `Keep your website active so customers can keep ordering.`;
+
+  const extra =
+    kind === "plan"
+      ? "Paying early never loses you days."
+      : "After your trial ends, you will not be able to edit your website until you pay.";
+
+  const button = kind === "plan" ? "Renew now" : "Pay to continue";
+
+  return `
+    <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#111">
+      <h1 style="font-size:20px;margin:0 0 16px">${escapeHtml(name)}, your ${what} ends in ${daysLeft} ${word}</h1>
+      <p style="font-size:15px;line-height:1.6;color:#444;margin:0 0 12px">${stats}</p>
+      <p style="font-size:15px;line-height:1.6;color:#444;margin:0 0 24px">${extra}</p>
+      <a href="${link}"
+         style="display:inline-block;padding:14px 28px;background:#1d4ed8;color:#fff;
+                text-decoration:none;border-radius:8px;font-size:15px;font-weight:600">
+        ${button}
+      </a>
+      <p style="font-size:12px;color:#999;margin:24px 0 0">CBE QuickSite</p>
+    </div>
+  `;
+}
+
+module.exports = { send, resetEmail, verifyEmail, reminderEmail };
