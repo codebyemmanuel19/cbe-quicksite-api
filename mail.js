@@ -118,4 +118,60 @@ function reminderEmail({ name, kind, daysLeft, orders, total, symbol, link }) {
   `;
 }
 
-module.exports = { send, resetEmail, verifyEmail, reminderEmail };
+function naira(symbol, amount) {
+  return `${escapeHtml(symbol)}${Number(amount || 0).toLocaleString("en-US")}`;
+}
+
+// Sent to the shop owner the moment a customer places an order.
+// Everything a customer typed is escaped before it goes into the email.
+function newOrderEmail({ shop, number, customer, phone, items, total, symbol, delivery, payment, note, link }) {
+  const rows = items
+    .map((i) => {
+      const extra = [i.variant, i.size, i.color].filter(Boolean).join(", ");
+      return `
+        <tr>
+          <td style="padding:6px 0;font-size:14px;color:#111">
+            ${Number(i.qty)} × ${escapeHtml(i.name)}${extra ? ` <span style="color:#777">(${escapeHtml(extra)})</span>` : ""}
+          </td>
+          <td style="padding:6px 0;font-size:14px;color:#111;text-align:right;white-space:nowrap">
+            ${naira(symbol, i.price * i.qty)}
+          </td>
+        </tr>`;
+    })
+    .join("");
+
+  const digits = String(phone || "").replace(/\D/g, "");
+
+  return `
+    <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#111">
+      <h1 style="font-size:20px;margin:0 0 6px">New order #${Number(number)}</h1>
+      <p style="font-size:14px;color:#666;margin:0 0 18px">${escapeHtml(shop)}</p>
+
+      <p style="font-size:15px;line-height:1.6;margin:0 0 4px"><b>${escapeHtml(customer)}</b></p>
+      <p style="font-size:14px;line-height:1.6;color:#444;margin:0 0 16px">
+        <a href="https://wa.me/${digits}" style="color:#1d4ed8">+${digits}</a>
+      </p>
+
+      <table style="width:100%;border-collapse:collapse;border-top:1px solid #eee;border-bottom:1px solid #eee;margin:0 0 14px">
+        ${rows}
+        <tr>
+          <td style="padding:10px 0 6px;font-size:15px;font-weight:700">Total</td>
+          <td style="padding:10px 0 6px;font-size:15px;font-weight:700;text-align:right">${naira(symbol, total)}</td>
+        </tr>
+      </table>
+
+      <p style="font-size:14px;line-height:1.6;color:#444;margin:0 0 4px">${escapeHtml(delivery)}</p>
+      <p style="font-size:14px;line-height:1.6;color:#444;margin:0 0 16px">${escapeHtml(payment)}</p>
+      ${note ? `<p style="font-size:14px;line-height:1.6;color:#444;margin:0 0 16px">Note: ${escapeHtml(note)}</p>` : ""}
+
+      <a href="${link}"
+         style="display:inline-block;padding:14px 28px;background:#1d4ed8;color:#fff;
+                text-decoration:none;border-radius:8px;font-size:15px;font-weight:600">
+        View order
+      </a>
+      <p style="font-size:12px;color:#999;margin:24px 0 0">CBE QuickSite</p>
+    </div>
+  `;
+}
+
+module.exports = { send, resetEmail, verifyEmail, reminderEmail, newOrderEmail };

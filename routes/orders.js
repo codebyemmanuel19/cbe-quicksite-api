@@ -3,6 +3,7 @@ const rateLimit = require("express-rate-limit");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
 const { COUNTRIES } = require("../countries");
+const { send, newOrderEmail } = require("../mail");
 
 const router = express.Router();
 
@@ -55,6 +56,50 @@ function shapeOrder(o) {
     note: o.note,
     createdAt: o.created_at,
   };
+}
+
+// Tells the shop owner a new order has arrived. It runs only after the order is
+// saved, and it can never make an order fail: any problem is just logged.
+async function notifyOwner(site, order, items) {
+  try {
+    let to = site.alert_email;
+    if (!to) {
+      const { rows } = await db.query("SELECT email FROM users WHERE id = $1", [site.user_id]);
+      to = rows[0] && rows[0].email;
+    }
+    if (!to) return;
+
+    const money = COUNTRIES[site.country] || COUNTRIES.NG || {};
+    const symbol = money.symbol || `${site.currency || ""} `;
+
+    let delivery = "Pickup";
+    if (order.delivery_type === "delivery") {
+      delivery = `Delivery to ${order.delivery_area}, ${order.delivery_address}`;
+      if (order.delivery_fee === null) delivery += " (delivery fee to be agreed)";
+    }
+
+    const appUrl = (process.env.CLIENT_URL || "").split(",")[0].trim() || "https://cbequicksite.com";
+
+    await send({
+      to,
+      subject: `New order #${order.order_number} on ${site.business_name}`,
+      html: newOrderEmail({
+        shop: site.business_name,
+        number: order.order_number,
+        customer: order.customer_name,
+        phone: order.customer_phone,
+        items,
+        total: order.total,
+        symbol,
+        delivery,
+        payment: order.payment_method === "transfer" ? "Bank transfer" : "Pay on delivery",
+        note: order.note,
+        link: `${appUrl}/dashboard/orders`,
+      }),
+    });
+  } catch (err) {
+    console.error("Order alert failed:", err.message);
+  }
 }
 
 // A customer places an order. Nothing about money is taken from the browser.
@@ -183,6 +228,10 @@ router.post("/:slug", orderLimiter, async (req, res) => {
   );
 
   const order = rows[0];
+
+  // Tell the shop owner. Not awaited, so the customer never waits for an email,
+  // and notifyOwner catches its own errors, so it can never break the order.
+  notifyOwner(site, order, items);
 
   // Pay on delivery, but this shop collects the delivery fee before dispatch
   const feeFirst =
