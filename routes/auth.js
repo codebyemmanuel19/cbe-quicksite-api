@@ -5,10 +5,14 @@ const jwt = require("jsonwebtoken");
 const rateLimit = require("express-rate-limit");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
-const { send, resetEmail, verifyEmail } = require("../mail");
+const { send, resetEmail } = require("../mail");
 
 const router = express.Router();
 const isProd = process.env.NODE_ENV === "production";
+
+const CODE_MINUTES = 10;
+const MAX_TRIES = 5;
+const RESEND_SECONDS = 60;
 
 // Only set a cookie domains once the API lives under cbequicksite.com.
 // A server cannot set a cookie for a domain it does not answer from.
@@ -24,6 +28,19 @@ const cookieOptions = {
   ...(cookieDomain ? { domain: cookieDomain } : {}),
 };
 
+// Table for the 6-digit confirm codes. Safe to run every time.
+db.query(
+  `CREATE TABLE IF NOT EXISTS email_codes (
+     id SERIAL PRIMARY KEY,
+     user_id TEXT NOT NULL,
+     code_hash TEXT NOT NULL,
+     attempts INT NOT NULL DEFAULT 0,
+     expires_at TIMESTAMPTZ NOT NULL,
+     used_at TIMESTAMPTZ,
+     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   )`
+).catch((err) => console.error("Could not create email_codes table:", err.message));
+
 function signToken(user) {
   return jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, {
     algorithm: "HS256",
@@ -35,29 +52,58 @@ function firstClientUrl() {
   return (process.env.CLIENT_URL || "http://localhost:3000").split(",")[0].trim();
 }
 
-// Makes a fresh confirm link and emails it. Used at signup and by "send it again".
-async function sendVerification(userId, email) {
-  // Only one live link at a time
+// Only the hash of a code is stored, tied to the user and our secret,
+// so a stolen database cannot be used to confirm anybody's email.
+function hashCode(userId, code) {
+  return crypto
+    .createHmac("sha256", String(process.env.JWT_SECRET || ""))
+    .update(`${userId}:${code}`)
+    .digest("hex");
+}
+
+function codeEmail(code) {
+  return `
+    <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#111">
+      <h1 style="font-size:20px;margin:0 0 16px">Confirm your email</h1>
+      <p style="font-size:15px;line-height:1.6;color:#444;margin:0 0 20px">
+        Welcome to CBE QuickSite. Type this code in the app to confirm your email:
+      </p>
+      <p style="font-size:34px;font-weight:700;letter-spacing:8px;margin:0 0 20px;color:#111">${code}</p>
+      <p style="font-size:13px;line-height:1.6;color:#777;margin:0">
+        This code works for ${CODE_MINUTES} minutes. If you did not create an account, you can ignore this email.
+      </p>
+      <p style="font-size:12px;color:#999;margin:24px 0 0">CBE QuickSite</p>
+    </div>
+  `;
+}
+
+// Saves a fresh 6-digit code and returns it. Older codes stop working.
+async function makeCode(userId) {
+  const uid = String(userId);
+  const code = String(crypto.randomInt(0, 1000000)).padStart(6, "0");
+
+  await db.query("UPDATE email_codes SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL", [uid]);
+
   await db.query(
-    "UPDATE email_verifications SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL",
-    [userId]
+    `INSERT INTO email_codes (user_id, code_hash, expires_at)
+     VALUES ($1, $2, NOW() + INTERVAL '${CODE_MINUTES} minutes')`,
+    [uid, hashCode(uid, code)]
   );
 
-  const token = crypto.randomBytes(32).toString("hex");
-  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  return code;
+}
 
-  await db.query(
-    `INSERT INTO email_verifications (user_id, token_hash, expires_at)
-     VALUES ($1, $2, NOW() + INTERVAL '24 hours')`,
-    [userId, tokenHash]
-  );
-
-  const link = `${firstClientUrl()}/verify-email?token=${token}`;
+function mailCode(email, code) {
   return send({
     to: email,
-    subject: "Confirm your email - CBE QuickSite",
-    html: verifyEmail(link),
+    subject: `${code} is your CBE QuickSite code`,
+    html: codeEmail(code),
   });
+}
+
+async function sendCode(userId, email) {
+  const code = await makeCode(userId);
+  return mailCode(email, code);
 }
 
 // Slows down anyone guessing passwords over and over
@@ -76,6 +122,24 @@ const resetLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests. Try again in an hour." },
+});
+
+// For typing the 6-digit code (each code also locks after 5 wrong tries)
+const codeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many attempts. Try again in 15 minutes." },
+});
+
+// For "Send again"
+const resendLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 12,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many codes requested. Try again in an hour." },
 });
 
 router.post("/signup", authLimiter, async (req, res) => {
@@ -97,14 +161,22 @@ router.post("/signup", authLimiter, async (req, res) => {
       [email, hash]
     );
     const user = rows[0];
+
+    // The code is saved BEFORE we reply, so the confirm screen always finds it.
+    // Only the email itself is sent after the reply, so a slow mail server never holds up signup.
+    let code = null;
+    try {
+      code = await makeCode(user.id);
+    } catch (err) {
+      console.error("Could not make confirm code:", err.message);
+    }
+
     res.cookie("token", signToken(user), cookieOptions);
     res.status(201).json({ user });
 
-    // After the reply, so a slow mail server never holds up signup.
-    // They are signed in either way and can ask for the email again.
-    sendVerification(user.id, user.email).catch((err) =>
-      console.error("Verification email failed:", err.message)
-    );
+    if (code) {
+      mailCode(user.email, code).catch((err) => console.error("Confirm code email failed:", err.message));
+    }
   } catch (err) {
     if (err.code === "23505") {
       return res.status(409).json({ error: "That email already has an account" });
@@ -232,7 +304,7 @@ router.post("/reset-password", authLimiter, async (req, res) => {
   res.json({ user });
 });
 
-// They clicked the confirm link in their email
+// Old confirm links (sent before the 6-digit code) still work
 router.post("/verify-email", authLimiter, async (req, res) => {
   const token = String(req.body.token || "").trim();
 
@@ -274,8 +346,69 @@ router.post("/verify-email", authLimiter, async (req, res) => {
   res.json({ user });
 });
 
-// "Send it again" on the dashboard banner
-router.post("/resend-verification", resetLimiter, requireAuth, async (req, res) => {
+// They typed the 6-digit code from their email
+router.post("/verify-code", codeLimiter, requireAuth, async (req, res) => {
+  const code = String(req.body.code || "").replace(/\D/g, "");
+  if (code.length !== 6) {
+    return res.status(400).json({ error: "Enter the 6-digit code" });
+  }
+
+  const uid = String(req.user.id);
+
+  const { rows } = await db.query(
+    `SELECT id, code_hash, attempts FROM email_codes
+     WHERE user_id = $1 AND used_at IS NULL AND expires_at > NOW()
+     ORDER BY id DESC LIMIT 1`,
+    [uid]
+  );
+  const row = rows[0];
+
+  if (!row) {
+    return res.status(400).json({ error: "This code has expired. Tap Send again." });
+  }
+  if (row.attempts >= MAX_TRIES) {
+    return res.status(429).json({ error: "Too many wrong tries. Tap Send again for a new code." });
+  }
+
+  const real = Buffer.from(row.code_hash);
+  const given = Buffer.from(hashCode(uid, code));
+  const ok = real.length === given.length && crypto.timingSafeEqual(real, given);
+
+  if (!ok) {
+    await db.query("UPDATE email_codes SET attempts = attempts + 1 WHERE id = $1", [row.id]);
+    const left = MAX_TRIES - (row.attempts + 1);
+    return res.status(400).json({
+      error:
+        left > 0
+          ? `Wrong code. ${left} ${left === 1 ? "try" : "tries"} left.`
+          : "Too many wrong tries. Tap Send again for a new code.",
+    });
+  }
+
+  // Burn the code and confirm the email together
+  const client = await db.pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("UPDATE email_codes SET used_at = NOW() WHERE id = $1", [row.id]);
+    await client.query(
+      "UPDATE users SET email_verified_at = NOW() WHERE id = $1 AND email_verified_at IS NULL",
+      [req.user.id]
+    );
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  res.json({ ok: true });
+});
+
+// "Send again" on the confirm screen.
+// With { onlyIfNone: true } it only sends when they have no live code yet
+// (accounts made before codes existed), and never replaces a code they already have.
+router.post("/resend-verification", resendLimiter, requireAuth, async (req, res) => {
   const { rows } = await db.query(
     "SELECT id, email, email_verified_at FROM users WHERE id = $1",
     [req.user.id]
@@ -284,7 +417,30 @@ router.post("/resend-verification", resetLimiter, requireAuth, async (req, res) 
   if (!user) return res.status(401).json({ error: "Not signed in" });
   if (user.email_verified_at) return res.json({ ok: true, alreadyVerified: true });
 
-  await sendVerification(user.id, user.email);
+  const uid = String(user.id);
+
+  if (req.body && req.body.onlyIfNone) {
+    const live = await db.query(
+      "SELECT 1 FROM email_codes WHERE user_id = $1 AND used_at IS NULL AND expires_at > NOW() LIMIT 1",
+      [uid]
+    );
+    if (live.rows.length) return res.json({ ok: true, kept: true });
+  }
+
+  // One code per minute
+  const last = await db.query(
+    `SELECT EXTRACT(EPOCH FROM (NOW() - created_at))::int AS age
+     FROM email_codes WHERE user_id = $1 ORDER BY id DESC LIMIT 1`,
+    [uid]
+  );
+  if (last.rows.length && last.rows[0].age < RESEND_SECONDS) {
+    return res.status(429).json({
+      error: "Please wait a minute before asking again.",
+      wait: RESEND_SECONDS - last.rows[0].age,
+    });
+  }
+
+  await sendCode(user.id, user.email);
   res.json({ ok: true });
 });
 

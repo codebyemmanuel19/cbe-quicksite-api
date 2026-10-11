@@ -5,6 +5,7 @@ const helmet = require("helmet");
 const cookieParser = require("cookie-parser");
 const rateLimit = require("express-rate-limit");
 const db = require("./db");
+const { requireVerified } = require("./middleware/auth");
 
 const app = express();
 
@@ -47,20 +48,21 @@ app.get("/health", async (req, res) => {
   }
 });
 
-app.use("/properties", require("./routes/properties"));
+// Everything that builds or changes a shop needs a confirmed email (requireVerified)
+app.use("/properties", requireVerified, require("./routes/properties"));
 
-// Signup, login, logout, who am I
+// Signup, login, logout, who am I, confirm code (these must work before confirming)
 app.use("/auth", require("./routes/auth"));
 
 // Link check, creating a shop, business info, order settings
-app.use("/sites", require("./routes/sites"));
+app.use("/sites", requireVerified, require("./routes/sites"));
 
 // Vendor's own categories and products
-app.use("/categories", require("./routes/categories"));
-app.use("/products", require("./routes/products"));
+app.use("/categories", requireVerified, require("./routes/categories"));
+app.use("/products", requireVerified, require("./routes/products"));
 
 // Customer orders and the vendor's orders page
-app.use("/orders", require("./routes/orders"));
+app.use("/orders", requireVerified, require("./routes/orders"));
 
 // What a customer's browser loads
 app.use("/public", require("./routes/public"));
@@ -68,7 +70,7 @@ app.use("/public", require("./routes/public"));
 // Plans, payments, days
 app.use("/billing", require("./routes/billing"));
 
-app.use("/uploads", require("./routes/uploads"));
+app.use("/uploads", requireVerified, require("./routes/uploads"));
 
 // Daily reminder emails, called by cron-job.org
 app.use("/cron", require("./routes/cron"));
