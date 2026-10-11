@@ -2,12 +2,14 @@ const express = require("express");
 const crypto = require("crypto");
 const db = require("../db");
 const { send, reminderEmail } = require("../mail");
+const { pick, buildEmail, unsubToken } = require("../lifecycle");
 const { COUNTRIES } = require("../countries");
 
 const router = express.Router();
 
 const DAY = 24 * 60 * 60 * 1000;
 const MAX_PER_RUN = 40;
+const MAX_LIFECYCLE_PER_RUN = 25;
 
 // A paid plan is reminded at 5 days and at 1 day left.
 // The 7 day free trial is reminded at 2 days and at 1 day left.
@@ -18,6 +20,27 @@ const TRIAL_STAGES = [2, 1];
 db.query("ALTER TABLE sites ADD COLUMN IF NOT EXISTS last_reminder TEXT").catch((err) =>
   console.error("Could not add last_reminder column:", err.message)
 );
+
+// Tables for the journey emails. Safe to run every time.
+const lifecycleReady = (async () => {
+  await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
+  await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS unsubscribed_at TIMESTAMPTZ");
+  await db.query(
+    `CREATE TABLE IF NOT EXISTS email_log (
+       id SERIAL PRIMARY KEY,
+       user_id TEXT NOT NULL,
+       key TEXT NOT NULL,
+       sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+       UNIQUE (user_id, key)
+     )`
+  );
+  await db.query(
+    `CREATE TABLE IF NOT EXISTS lifecycle_meta (
+       key TEXT PRIMARY KEY,
+       started_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+     )`
+  );
+})().catch((err) => console.error("Lifecycle setup failed:", err.message));
 
 function secretOk(req) {
   const secret = String(process.env.CRON_SECRET || "");
@@ -139,6 +162,138 @@ router.post("/reminders", async (req, res) => {
     console.error("Reminder job failed:", err);
     res.status(500).json({ ok: false, error: "Reminder job failed" });
   }
+});
+
+// Only people who signed up after this moment get the journey emails,
+// so turning it on never floods old accounts. Set LIFECYCLE_FROM (a date like
+// 2026-10-09) to choose your own start.
+async function lifecycleFrom() {
+  const fromEnv = String(process.env.LIFECYCLE_FROM || "").trim();
+  if (fromEnv && !Number.isNaN(Date.parse(fromEnv))) return new Date(fromEnv);
+
+  await db.query("INSERT INTO lifecycle_meta (key) VALUES ('lifecycle') ON CONFLICT (key) DO NOTHING");
+  const { rows } = await db.query("SELECT started_at FROM lifecycle_meta WHERE key = 'lifecycle'");
+  return new Date(rows[0].started_at);
+}
+
+// POST /cron/lifecycle  (header: x-cron-secret)  Run it every 10 minutes.
+// Add ?dry=1 to see who would get an email, without sending anything.
+router.post("/lifecycle", async (req, res) => {
+  if (!secretOk(req)) return res.status(404).json({ error: "Not found" });
+
+  try {
+    await lifecycleReady;
+
+    const dry = req.query.dry === "1";
+    const now = Date.now();
+    const from = await lifecycleFrom();
+    const apiBase = `https://${req.get("host")}`;
+
+    const { rows } = await db.query(
+      `SELECT u.id, u.email, u.created_at, u.installed_at,
+              s.id AS site_id, s.slug, s.business_name, s.business_type,
+              s.trial_ends_at, s.paid_until,
+              ((SELECT COUNT(*) FROM products p WHERE p.site_id = s.id)
+               + (SELECT COUNT(*) FROM properties r WHERE r.site_id = s.id))::int AS items,
+              COALESCE((SELECT array_agg(l.key) FROM email_log l WHERE l.user_id = u.id::text), '{}') AS sent,
+              (SELECT MAX(l.sent_at) FROM email_log l WHERE l.user_id = u.id::text) AS last_sent
+       FROM users u
+       LEFT JOIN sites s ON s.user_id = u.id
+       WHERE u.unsubscribed_at IS NULL
+         AND u.email_verified_at IS NOT NULL
+         AND u.created_at >= $1
+         AND (s.id IS NULL OR s.is_suspended IS NOT TRUE)
+       ORDER BY u.created_at ASC
+       LIMIT 500`,
+      [from]
+    );
+
+    let sent = 0;
+    let skipped = 0;
+    let failed = 0;
+    const wouldSend = [];
+
+    for (const u of rows) {
+      const key = pick(u, now);
+      if (!key) {
+        skipped++;
+        continue;
+      }
+
+      if (dry) {
+        wouldSend.push({ email: u.email, key });
+        continue;
+      }
+      if (sent >= MAX_LIFECYCLE_PER_RUN) break;
+
+      const mail = buildEmail(key, {
+        name: u.business_name,
+        businessType: u.business_type,
+        hasSite: !!u.site_id,
+        app: appUrl(),
+        unsubUrl: `${apiBase}/cron/unsubscribe?u=${encodeURIComponent(u.id)}&t=${unsubToken(u.id)}`,
+      });
+      if (!mail) {
+        skipped++;
+        continue;
+      }
+
+      // Claim it first, so two runs at the same time can never send twice
+      const claim = await db.query(
+        "INSERT INTO email_log (user_id, key) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING id",
+        [String(u.id), key]
+      );
+      if (!claim.rows.length) {
+        skipped++;
+        continue;
+      }
+
+      const result = await send({ to: u.email, subject: mail.subject, html: mail.html });
+      if (result.ok) {
+        sent++;
+      } else {
+        failed++;
+        // Remove the claim so the next run tries again
+        await db.query("DELETE FROM email_log WHERE user_id = $1 AND key = $2", [String(u.id), key]);
+      }
+
+      await sleep(600); // Resend allows only a couple of emails per second
+    }
+
+    res.json({
+      ok: true,
+      checked: rows.length,
+      sent,
+      skipped,
+      failed,
+      wouldSend: dry ? wouldSend : undefined,
+    });
+  } catch (err) {
+    console.error("Lifecycle job failed:", err);
+    res.status(500).json({ ok: false, error: "Lifecycle job failed" });
+  }
+});
+
+// The link at the bottom of every journey email
+router.get("/unsubscribe", async (req, res) => {
+  const id = String(req.query.u || "");
+  const token = String(req.query.t || "");
+
+  const page = (text) =>
+    res.type("html").send(
+      `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
+       <body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:420px;margin:60px auto;padding:0 20px;color:#111">
+       <h2>${text}</h2><p style="color:#555">CBE QuickSite</p></body>`
+    );
+
+  const real = Buffer.from(unsubToken(id));
+  const given = Buffer.from(token);
+  if (!id || real.length !== given.length || !crypto.timingSafeEqual(real, given)) {
+    return page("This link is not valid.");
+  }
+
+  await db.query("UPDATE users SET unsubscribed_at = NOW() WHERE id::text = $1 AND unsubscribed_at IS NULL", [id]);
+  page("You have been unsubscribed.");
 });
 
 module.exports = router;
