@@ -77,7 +77,7 @@ function content(key, c) {
         subject: "Welcome to CBEQuickSite 🎉",
         paras: [
           hi,
-          "Welcome to CBEQuickSite. Your 7-day free trial has started.",
+          `Welcome to CBEQuickSite. Your free trial starts when you add your first ${c.noun === "properties" ? "property" : "product"}. You get 24 hours to try everything.`,
           `Your website is ready to set up. Start by adding your business information and ${c.noun} so customers can find and explore your business online.`,
         ],
         button: "Set Up My Website",
@@ -132,7 +132,7 @@ function content(key, c) {
         subject: "Your CBEQuickSite trial has ended",
         paras: [
           hi,
-          "Your 7-day free trial has ended.",
+          "Your free trial has ended.",
           "You can continue using your CBEQuickSite website by choosing a plan.",
         ],
         button: "Continue With CBEQuickSite",

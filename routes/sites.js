@@ -1,7 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
-const { requireActive } = require("../middleware/locked");
+const { requireActive, OFFLINE_AFTER_DAYS } = require("../middleware/locked");
 const { isOurImage } = require("../images");
 const { COUNTRIES } = require("../countries");
 
@@ -69,7 +69,7 @@ function billingStatus(row) {
   const trial = new Date(row.trial_ends_at).getTime();
   if (trial > now) return "trial";
   const lockedSince = Math.max(trial, paid);
-  if (now > lockedSince + 30 * 24 * 60 * 60 * 1000) return "offline";
+  if (now > lockedSince + OFFLINE_AFTER_DAYS * 24 * 60 * 60 * 1000) return "offline";
   return "locked";
 }
 

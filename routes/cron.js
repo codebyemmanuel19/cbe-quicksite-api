@@ -12,9 +12,10 @@ const MAX_PER_RUN = 40;
 const MAX_LIFECYCLE_PER_RUN = 25;
 
 // A paid plan is reminded at 5 days and at 1 day left.
-// The 7 day free trial is reminded at 2 days and at 1 day left.
+// The free trial is short (24 hours), so it gets ONE reminder, 6 hours before it ends.
 const PLAN_STAGES = [5, 1];
-const TRIAL_STAGES = [2, 1];
+const TRIAL_REMIND_HOURS = 6;
+const HOUR = 60 * 60 * 1000;
 
 // Remembers what each shop was already emailed about. Safe to run every time.
 db.query("ALTER TABLE sites ADD COLUMN IF NOT EXISTS last_reminder TEXT").catch((err) =>
@@ -82,7 +83,7 @@ router.post("/reminders", async (req, res) => {
          AND (
            (s.paid_until > NOW() AND s.paid_until < NOW() + INTERVAL '5 days')
            OR ((s.paid_until IS NULL OR s.paid_until <= NOW())
-               AND s.trial_ends_at > NOW() AND s.trial_ends_at < NOW() + INTERVAL '2 days')
+               AND s.trial_ends_at > NOW() AND s.trial_ends_at < NOW() + INTERVAL '6 hours')
          )
        LIMIT 200`
     );
@@ -98,8 +99,13 @@ router.post("/reminders", async (req, res) => {
       const end = new Date(paidActive ? s.paid_until : s.trial_ends_at);
       const daysLeft = Math.ceil((end.getTime() - now) / DAY);
 
-      const stages = kind === "plan" ? PLAN_STAGES : TRIAL_STAGES;
-      const stage = stages.filter((x) => daysLeft <= x).pop();
+      let stage;
+      if (kind === "plan") {
+        stage = PLAN_STAGES.filter((x) => daysLeft <= x).pop();
+      } else {
+        const hoursLeft = (end.getTime() - now) / HOUR;
+        stage = hoursLeft <= TRIAL_REMIND_HOURS ? TRIAL_REMIND_HOURS : undefined;
+      }
       if (!stage || !s.owner_email) {
         skipped++;
         continue;
@@ -134,7 +140,10 @@ router.post("/reminders", async (req, res) => {
 
       const result = await send({
         to: s.owner_email,
-        subject: `Your ${what} ends in ${daysLeft} ${daysLeft === 1 ? "day" : "days"}`,
+        subject:
+          kind === "plan"
+            ? `Your ${what} ends in ${daysLeft} ${daysLeft === 1 ? "day" : "days"}`
+            : "Your free trial ends in a few hours",
         html: reminderEmail({
           name: s.business_name,
           kind,

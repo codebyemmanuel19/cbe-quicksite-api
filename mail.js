@@ -88,6 +88,8 @@ function verifyEmail(link) {
 function reminderEmail({ name, kind, daysLeft, orders, total, symbol, link }) {
   const what = kind === "plan" ? "plan" : "free trial";
   const word = daysLeft === 1 ? "day" : "days";
+  // The free trial is only 24 hours, so we say "in a few hours" instead of counting days
+  const when = kind === "plan" ? `in ${daysLeft} ${word}` : "in a few hours";
 
   const stats =
     orders > 0
@@ -105,7 +107,7 @@ function reminderEmail({ name, kind, daysLeft, orders, total, symbol, link }) {
 
   return `
     <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#111">
-      <h1 style="font-size:20px;margin:0 0 16px">${escapeHtml(name)}, your ${what} ends in ${daysLeft} ${word}</h1>
+      <h1 style="font-size:20px;margin:0 0 16px">${escapeHtml(name)}, your ${what} ends ${when}</h1>
       <p style="font-size:15px;line-height:1.6;color:#444;margin:0 0 12px">${stats}</p>
       <p style="font-size:15px;line-height:1.6;color:#444;margin:0 0 24px">${extra}</p>
       <a href="${link}"

@@ -221,7 +221,7 @@ router.post("/", requireAuth, requireActive, async (req, res) => {
 
   // The 7 free days start on the first property only. IS NULL makes sure it can never restart.
   const { rows: trialRows } = await db.query(
-    `UPDATE sites SET trial_ends_at = NOW() + INTERVAL '7 days'
+    `UPDATE sites SET trial_ends_at = NOW() + INTERVAL '24 hours'
      WHERE id = $1 AND trial_ends_at IS NULL
      RETURNING trial_ends_at`,
     [siteId]
