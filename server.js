@@ -6,6 +6,7 @@ const cookieParser = require("cookie-parser");
 const rateLimit = require("express-rate-limit");
 const db = require("./db");
 const { requireVerified } = require("./middleware/auth");
+const { requireActive } = require("./middleware/locked");
 
 const app = express();
 
@@ -35,6 +36,13 @@ app.use(
 
 app.use(rateLimit({ windowMs: 60000, max: 100, standardHeaders: true, legacyHeaders: false }));
 
+// After the free trial, an unpaid vendor can still look, but cannot add, change or delete.
+// This is the real lock. The locked screen in the dashboard is only the friendly face of it.
+function lockWrites(req, res, next) {
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
+  Promise.resolve(requireActive(req, res, next)).catch(next);
+}
+
 app.get("/", (req, res) => res.json({ ok: true, service: "CBE QuickSite API" }));
 
 // Proves the API is alive and can reach the database
@@ -48,8 +56,10 @@ app.get("/health", async (req, res) => {
   }
 });
 
-// Everything that builds or changes a shop needs a confirmed email (requireVerified)
-app.use("/properties", requireVerified, require("./routes/properties"));
+// Everything that builds or changes a shop needs a confirmed email (requireVerified),
+// and changes also need a trial or a paid plan (lockWrites)
+app.use("/properties", requireVerified, lockWrites, require("./routes/properties"));
+app.use("/cars", requireVerified, lockWrites, require("./routes/cars"));
 
 // Signup, login, logout, who am I, confirm code (these must work before confirming)
 app.use("/auth", require("./routes/auth"));
@@ -58,8 +68,8 @@ app.use("/auth", require("./routes/auth"));
 app.use("/sites", requireVerified, require("./routes/sites"));
 
 // Vendor's own categories and products
-app.use("/categories", requireVerified, require("./routes/categories"));
-app.use("/products", requireVerified, require("./routes/products"));
+app.use("/categories", requireVerified, lockWrites, require("./routes/categories"));
+app.use("/products", requireVerified, lockWrites, require("./routes/products"));
 
 // Customer orders and the vendor's orders page
 app.use("/orders", requireVerified, require("./routes/orders"));
@@ -70,7 +80,7 @@ app.use("/public", require("./routes/public"));
 // Plans, payments, days
 app.use("/billing", require("./routes/billing"));
 
-app.use("/uploads", requireVerified, require("./routes/uploads"));
+app.use("/uploads", requireVerified, lockWrites, require("./routes/uploads"));
 
 // Daily reminder emails, called by cron-job.org
 app.use("/cron", require("./routes/cron"));

@@ -204,7 +204,8 @@ router.post("/lifecycle", async (req, res) => {
               s.id AS site_id, s.slug, s.business_name, s.business_type,
               s.trial_ends_at, s.paid_until,
               ((SELECT COUNT(*) FROM products p WHERE p.site_id = s.id)
-               + (SELECT COUNT(*) FROM properties r WHERE r.site_id = s.id))::int AS items,
+               + (SELECT COUNT(*) FROM properties r WHERE r.site_id = s.id)
+               + (SELECT COUNT(*) FROM cars cr WHERE cr.site_id = s.id))::int AS items,
               COALESCE((SELECT array_agg(l.key) FROM email_log l WHERE l.user_id = u.id::text), '{}') AS sent,
               (SELECT MAX(l.sent_at) FROM email_log l WHERE l.user_id = u.id::text) AS last_sent
        FROM users u

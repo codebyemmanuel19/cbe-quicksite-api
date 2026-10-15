@@ -4,6 +4,7 @@
 const MONTHLY = {
   default: 5000,
   realestate: 10000,
+  cars: 10000,
 };
 
 // Every business type gets the same plan shape. Only the amount changes.

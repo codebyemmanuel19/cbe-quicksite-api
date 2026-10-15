@@ -2,6 +2,7 @@ const express = require("express");
 const rateLimit = require("express-rate-limit");
 const db = require("../db");
 const { COUNTRIES } = require("../countries");
+const { OFFLINE_AFTER_DAYS } = require("../middleware/locked");
 
 const router = express.Router();
 
@@ -14,7 +15,7 @@ function isOffline(site) {
   if (!site.trial_ends_at) return false; // brand new shop, still loading products
   const trial = new Date(site.trial_ends_at).getTime();
   if (trial > now) return false;
-  return now > Math.max(trial, paid) + 30 * 24 * 60 * 60 * 1000;
+  return now > Math.max(trial, paid) + OFFLINE_AFTER_DAYS * 24 * 60 * 60 * 1000;
 }
 
 async function loadBySlug(slug) {
@@ -139,6 +140,43 @@ router.get("/shop/:slug/properties", async (req, res) => {
   });
 });
 
+
+// ---- Cars ----
+
+router.get("/shop/:slug/cars", async (req, res) => {
+  const site = await loadBySlug(req.params.slug);
+  if (!site || isOffline(site)) return res.status(404).json({ error: "Shop not found" });
+
+  const { rows } = await db.query(
+    `SELECT id, title, make, model, year, price, condition, mileage, transmission,
+            fuel, color, location, status, description, photos
+     FROM cars
+     WHERE site_id = $1
+     ORDER BY created_at DESC`,
+    [site.id]
+  );
+
+  res.json({
+    cars: rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      make: r.make,
+      model: r.model,
+      year: r.year,
+      price: Number(r.price),
+      condition: r.condition,
+      mileage: r.mileage,
+      transmission: r.transmission,
+      fuel: r.fuel,
+      color: r.color,
+      location: r.location,
+      status: r.status,
+      description: r.description,
+      photos: r.photos,
+    })),
+  });
+});
+
 // Stops one visitor filling the agent's inquiry list
 const inquiryLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
@@ -156,6 +194,21 @@ router.post("/shop/:slug/inquiries", inquiryLimiter, async (req, res) => {
   const propertyId = String(req.body.propertyId || "");
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(propertyId)) {
     return res.status(400).json({ error: "Property not found" });
+  }
+
+  // Car dealers use the same button. The title still comes from the database.
+  if (site.business_type === "cars") {
+    const { rows: car } = await db.query("SELECT title FROM cars WHERE id = $1 AND site_id = $2", [
+      propertyId,
+      site.id,
+    ]);
+    if (!car.length) return res.status(404).json({ error: "Car not found" });
+    await db.query("INSERT INTO car_inquiries (site_id, car_id, car_title) VALUES ($1, $2, $3)", [
+      site.id,
+      propertyId,
+      car[0].title,
+    ]);
+    return res.status(201).json({ ok: true });
   }
 
   // The title is taken from the database, never from the browser, so nobody can post junk

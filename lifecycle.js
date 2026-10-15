@@ -77,7 +77,7 @@ function content(key, c) {
         subject: "Welcome to CBEQuickSite 🎉",
         paras: [
           hi,
-          `Welcome to CBEQuickSite. Your free trial starts when you add your first ${c.noun === "properties" ? "property" : "product"}. You get 24 hours to try everything.`,
+          `Welcome to CBEQuickSite. Your free trial starts when you add your first ${c.noun === "properties" ? "property" : c.noun === "cars" ? "car" : "product"}. You get 24 hours to try everything.`,
           `Your website is ready to set up. Start by adding your business information and ${c.noun} so customers can find and explore your business online.`,
         ],
         button: "Set Up My Website",
@@ -251,13 +251,14 @@ function render({ subject, paras, button, link, unsubUrl }) {
 // ctx: { name, businessType, hasSite, app, unsubUrl }
 function buildEmail(key, ctx) {
   const realestate = ctx.businessType === "realestate";
-  const noun = realestate ? "properties" : "products";
+  const cars = ctx.businessType === "cars";
+  const noun = realestate ? "properties" : cars ? "cars" : "products";
   const c = {
     name: escapeHtml(ctx.name || "there"),
     noun,
     Noun: noun[0].toUpperCase() + noun.slice(1),
     hasSite: ctx.hasSite,
-    addPath: realestate ? "/dashboard/properties" : "/dashboard/products",
+    addPath: realestate ? "/dashboard/properties" : cars ? "/dashboard/cars" : "/dashboard/products",
   };
 
   const data = content(key, c);
