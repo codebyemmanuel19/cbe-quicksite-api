@@ -1,5 +1,5 @@
 const express = require("express");
-const crypto = require("crypto");
+const crypto = require("crypto"); 
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
 const { statusFor, FREE_ITEMS } = require("../middleware/locked");
@@ -12,7 +12,7 @@ function firstClientUrl() {
   return (process.env.CLIENT_URL || "http://localhost:3000").split(",")[0].trim();
 }
 
-// A stray space or quote mark in .env breaks the header without saying why
+// A stray space or  quote mark in .env breaks the header without saying why
 function secretKey() {
   return String(process.env.PAYSTACK_SECRET_KEY || "").trim().replace(/^["']|["']$/g, "");
 }
