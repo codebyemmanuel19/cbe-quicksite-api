@@ -2,7 +2,7 @@ const express = require("express");
 const crypto = require("crypto");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
-const { billingStatus } = require("../middleware/locked");
+const { statusFor, FREE_ITEMS } = require("../middleware/locked");
 const { PLANS, plansFor } = require("../plans");
 const { creditPayment } = require("../credit");
 
@@ -23,7 +23,7 @@ async function loadSite(userId) {
 }
 
 function daysLeft(site) {
-  const end = site.paid_until || site.trial_ends_at;
+  const end = site.paid_until;
   if (!end) return null;
   return Math.max(0, Math.ceil((new Date(end).getTime() - Date.now()) / 86400000));
 }
@@ -43,12 +43,16 @@ router.get("/status", requireAuth, async (req, res) => {
     [site.id]
   );
 
+  const { status, items } = await statusFor(site);
+
   res.json({
     billing: {
-      status: billingStatus(site),
+      status,
       daysLeft: daysLeft(site),
       trialEndsAt: site.trial_ends_at,
       paidUntil: site.paid_until,
+      items,
+      freeItems: FREE_ITEMS,
     },
     // The price depends on the kind of business, so the shop has to be loaded first
     plans: Object.values(plansFor(site.business_type)),
@@ -139,10 +143,14 @@ router.post("/verify", requireAuth, async (req, res) => {
 
   if (!result.ok) return res.status(400).json({ error: result.error });
 
+  const { status, items } = await statusFor(site);
+
   res.json({
     ok: true,
     billing: {
-      status: billingStatus(site),
+      status,
+      items,
+      freeItems: FREE_ITEMS,
       daysLeft: daysLeft(site),
       paidUntil: site.paid_until,
     },

@@ -35,30 +35,21 @@ function pick(u, now) {
 
   const items = Number(u.items) || 0;
   const hasSite = !!u.site_id;
-  const started = !!u.trial_ends_at;
-  const endedFor = started ? (now - new Date(u.trial_ends_at).getTime()) / DAY : -1;
-  const ended = started && endedFor >= 0;
 
   const list = [];
-  if (!ended) {
-    list.push(["no_products", hasSite && items === 0 && age >= 1]);
-    list.push(["few_products", items >= 1 && items <= 2 && age >= 1]);
-    list.push(["install", !u.installed_at && age >= 2]);
-    list.push(["checkin3", items < 3 && age >= 3]);
-    list.push(["dormant14", !started && age >= 14]);
-  } else {
-    list.push(["trial_ended", endedFor >= 0]);
-    list.push(["after1", endedFor >= 1]);
-    list.push(["after3", endedFor >= 3]);
-    list.push(["after7", endedFor >= 7]);
-  }
+  list.push(["limit_reached", hasSite && items >= 3]);
+  list.push(["no_products", hasSite && items === 0 && age >= 1]);
+  list.push(["few_products", items >= 1 && items <= 2 && age >= 1]);
+  list.push(["install", !u.installed_at && age >= 2]);
+  list.push(["checkin3", items < 3 && age >= 3]);
+  list.push(["dormant14", items === 0 && age >= 14]);
 
   for (const [key, ok] of list) {
     if (ok && !sent.has(key) && sinceLast >= MIN_GAP_DAYS) return key;
   }
 
   // Weekly tips, only after the main emails are done
-  const tipsOpen = ended ? endedFor >= 14 : !started && age >= 21;
+  const tipsOpen = age >= 21;
   if (tipsOpen && sinceLast >= TIP_GAP_DAYS) {
     const next = TIP_KEYS.find((k) => !sent.has(k));
     if (next) return next;
@@ -77,7 +68,7 @@ function content(key, c) {
         subject: "Welcome to CBEQuickSite 🎉",
         paras: [
           hi,
-          `Welcome to CBEQuickSite. Your free trial starts when you add your first ${c.noun === "properties" ? "property" : c.noun === "cars" ? "car" : "product"}. You get 24 hours to try everything.`,
+          `Welcome to CBEQuickSite. You can add 3 ${c.noun} for free. No payment needed to start.`,
           `Your website is ready to set up. Start by adding your business information and ${c.noun} so customers can find and explore your business online.`,
         ],
         button: "Set Up My Website",
@@ -126,6 +117,17 @@ function content(key, c) {
         ],
         button: "Continue Setup",
         path: startPath,
+      };
+    case "limit_reached":
+      return {
+        subject: "Your website is ready for more",
+        paras: [
+          hi,
+          `You have added your 3 free ${c.noun}. Your website is live and customers can see it.`,
+          `To add more ${c.noun}, choose a plan. It takes a minute.`,
+        ],
+        button: "Choose a Plan",
+        path: "/dashboard/billing",
       };
     case "trial_ended":
       return {

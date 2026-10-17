@@ -226,18 +226,10 @@ router.post("/", requireAuth, requireActive, async (req, res) => {
      c.fuel, c.color, c.location, c.status, c.description, c.photos]
   );
 
-  // The 24 hours start on the first car only. IS NULL means it can never restart.
-  const { rows: trialRows } = await db.query(
-    `UPDATE sites SET trial_ends_at = NOW() + INTERVAL '24 hours'
-     WHERE id = $1 AND trial_ends_at IS NULL
-     RETURNING trial_ends_at`,
-    [siteId]
-  );
 
   res.status(201).json({
     car: shape(rows[0]),
-    trialStartedAt: trialRows.length ? trialRows[0].trial_ends_at : null,
-  });
+      });
 });
 
 router.put("/:id", requireAuth, requireActive, async (req, res) => {

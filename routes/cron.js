@@ -81,11 +81,7 @@ router.post("/reminders", async (req, res) => {
        JOIN users u ON u.id = s.user_id
        WHERE s.is_suspended IS NOT TRUE
          AND u.email_verified_at IS NOT NULL
-         AND (
-           (s.paid_until > NOW() AND s.paid_until < NOW() + INTERVAL '5 days')
-           OR ((s.paid_until IS NULL OR s.paid_until <= NOW())
-               AND s.trial_ends_at > NOW() AND s.trial_ends_at < NOW() + INTERVAL '6 hours')
-         )
+         AND s.paid_until > NOW() AND s.paid_until < NOW() + INTERVAL '5 days'
        LIMIT 200`
     );
 

@@ -1,7 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
-const { requireActive, OFFLINE_AFTER_DAYS } = require("../middleware/locked");
+const { requireActive, billingStatus, countItems, FREE_ITEMS } = require("../middleware/locked");
 const { isOurImage } = require("../images");
 const { COUNTRIES } = require("../countries");
 
@@ -59,27 +59,13 @@ function normalisePhone(value, dialCode) {
   return /^[0-9]{8,15}$/.test(digits) ? digits : null;
 }
 
-// trial, active, locked and offline all come from these dates, so no daily job is needed
-function billingStatus(row) {
-  const now = Date.now();
-  if (row.is_suspended) return "suspended";
-  const paid = row.paid_until ? new Date(row.paid_until).getTime() : 0;
-  if (paid > now) return "active";
-  if (!row.trial_ends_at) return "trial_not_started";
-  const trial = new Date(row.trial_ends_at).getTime();
-  if (trial > now) return "trial";
-  const lockedSince = Math.max(trial, paid);
-  if (now > lockedSince + OFFLINE_AFTER_DAYS * 24 * 60 * 60 * 1000) return "offline";
-  return "locked";
-}
-
 function daysLeft(row) {
   const end = row.paid_until || row.trial_ends_at;
   if (!end) return null;
   return Math.max(0, Math.ceil((new Date(end).getTime() - Date.now()) / 86400000));
 }
 
-function shapeSite(s) {
+function shapeSite(s, items) {
   return {
     id: s.id,
     slug: s.slug,
@@ -116,10 +102,12 @@ function shapeSite(s) {
       alertEmail: s.alert_email,
     },
     billing: {
-      status: billingStatus(s),
+      status: billingStatus(s, items),
       daysLeft: daysLeft(s),
       trialEndsAt: s.trial_ends_at,
       paidUntil: s.paid_until,
+      items,
+      freeItems: FREE_ITEMS,
     },
   };
 }
@@ -146,7 +134,7 @@ router.get("/check-slug", async (req, res) => {
 router.get("/me", requireAuth, async (req, res) => {
   const site = await loadSite(req.user.id);
   if (!site) return res.status(404).json({ error: "No shop yet" });
-  res.json({ site: shapeSite(site) });
+  res.json({ site: shapeSite(site, await countItems(site.id)) });
 });
 
 router.post("/", requireAuth, async (req, res) => {
@@ -174,7 +162,7 @@ router.post("/", requireAuth, async (req, res) => {
        RETURNING *`,
       [req.user.id, slug, type, country, info.currency, name, whatsapp]
     );
-    res.status(201).json({ site: shapeSite(rows[0]) });
+    res.status(201).json({ site: shapeSite(rows[0], await countItems(rows[0].id)) });
   } catch (err) {
     if (err.code === "23505") {
       const where = String(err.constraint || err.detail || "");
@@ -228,7 +216,7 @@ router.put("/business", requireAuth, requireActive, async (req, res) => {
     ]
   );
 
-  res.json({ site: shapeSite(rows[0]) });
+  res.json({ site: shapeSite(rows[0], await countItems(rows[0].id)) });
 });
 
 // Order Settings page. Also locked when the trial has ended.
@@ -316,7 +304,7 @@ router.put("/order-settings", requireAuth, requireActive, async (req, res) => {
     ]
   );
 
-  res.json({ site: shapeSite(rows[0]) });
+  res.json({ site: shapeSite(rows[0], await countItems(rows[0].id)) });
 });
 
 module.exports = router;

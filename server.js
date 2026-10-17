@@ -6,7 +6,7 @@ const cookieParser = require("cookie-parser");
 const rateLimit = require("express-rate-limit");
 const db = require("./db");
 const { requireVerified } = require("./middleware/auth");
-const { requireActive } = require("./middleware/locked");
+const { requireActive, requireRoom } = require("./middleware/locked");
 
 const app = express();
 
@@ -43,6 +43,11 @@ function lockWrites(req, res, next) {
   Promise.resolve(requireActive(req, res, next)).catch(next);
 }
 
+// Free vendors can add 3 items. The 4th needs a paid plan.
+function limitFree(req, res, next) {
+  requireRoom(req, res, next);
+}
+
 app.get("/", (req, res) => res.json({ ok: true, service: "CBE QuickSite API" }));
 
 // Proves the API is alive and can reach the database
@@ -58,8 +63,8 @@ app.get("/health", async (req, res) => {
 
 // Everything that builds or changes a shop needs a confirmed email (requireVerified),
 // and changes also need a trial or a paid plan (lockWrites)
-app.use("/properties", requireVerified, lockWrites, require("./routes/properties"));
-app.use("/cars", requireVerified, lockWrites, require("./routes/cars"));
+app.use("/properties", requireVerified, lockWrites, limitFree, require("./routes/properties"));
+app.use("/cars", requireVerified, lockWrites, limitFree, require("./routes/cars"));
 
 // Signup, login, logout, who am I, confirm code (these must work before confirming)
 app.use("/auth", require("./routes/auth"));
@@ -69,7 +74,7 @@ app.use("/sites", requireVerified, require("./routes/sites"));
 
 // Vendor's own categories and products
 app.use("/categories", requireVerified, lockWrites, require("./routes/categories"));
-app.use("/products", requireVerified, lockWrites, require("./routes/products"));
+app.use("/products", requireVerified, lockWrites, limitFree, require("./routes/products"));
 
 // Customer orders and the vendor's orders page
 app.use("/orders", requireVerified, require("./routes/orders"));

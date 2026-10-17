@@ -2,20 +2,16 @@ const express = require("express");
 const rateLimit = require("express-rate-limit");
 const db = require("../db");
 const { COUNTRIES } = require("../countries");
-const { OFFLINE_AFTER_DAYS } = require("../middleware/locked");
+const { statusFor } = require("../middleware/locked");
 
 const router = express.Router();
 
-// A shop is hidden when it is unpaid for too long, or when you suspend it
-function isOffline(site) {
+// A shop is hidden when a paid plan lapsed for too long, or when you suspend it.
+// Shops with 3 items or fewer are free and never go offline.
+async function isOffline(site) {
   if (site.is_suspended) return true;
-  const now = Date.now();
-  const paid = site.paid_until ? new Date(site.paid_until).getTime() : 0;
-  if (paid > now) return false;
-  if (!site.trial_ends_at) return false; // brand new shop, still loading products
-  const trial = new Date(site.trial_ends_at).getTime();
-  if (trial > now) return false;
-  return now > Math.max(trial, paid) + OFFLINE_AFTER_DAYS * 24 * 60 * 60 * 1000;
+  const { status } = await statusFor(site);
+  return status === "offline";
 }
 
 async function loadBySlug(slug) {
@@ -29,7 +25,7 @@ async function loadBySlug(slug) {
 // those only come back after a real order, so nobody can scrape account numbers.
 router.get("/shop/:slug", async (req, res) => {
   const site = await loadBySlug(req.params.slug);
-  if (!site || isOffline(site)) return res.status(404).json({ error: "Shop not found" });
+  if (!site || (await isOffline(site))) return res.status(404).json({ error: "Shop not found" });
 
   const money = COUNTRIES[site.country] || COUNTRIES.NG;
 
@@ -74,7 +70,7 @@ router.get("/shop/:slug", async (req, res) => {
 
 router.get("/shop/:slug/products", async (req, res) => {
   const site = await loadBySlug(req.params.slug);
-  if (!site || isOffline(site)) return res.status(404).json({ error: "Shop not found" });
+  if (!site || (await isOffline(site))) return res.status(404).json({ error: "Shop not found" });
 
   const { rows } = await db.query(
     `SELECT p.id, p.name, p.price, p.description, p.photos, p.sizes, p.colors, p.variants,
@@ -109,7 +105,7 @@ router.get("/shop/:slug/products", async (req, res) => {
 // Everything an agent has listed. Same offline rules as the shops.
 router.get("/shop/:slug/properties", async (req, res) => {
   const site = await loadBySlug(req.params.slug);
-  if (!site || isOffline(site)) return res.status(404).json({ error: "Shop not found" });
+  if (!site || (await isOffline(site))) return res.status(404).json({ error: "Shop not found" });
 
   const { rows } = await db.query(
     `SELECT id, title, price, location, type, listing, status,
@@ -145,7 +141,7 @@ router.get("/shop/:slug/properties", async (req, res) => {
 
 router.get("/shop/:slug/cars", async (req, res) => {
   const site = await loadBySlug(req.params.slug);
-  if (!site || isOffline(site)) return res.status(404).json({ error: "Shop not found" });
+  if (!site || (await isOffline(site))) return res.status(404).json({ error: "Shop not found" });
 
   const { rows } = await db.query(
     `SELECT id, title, make, model, year, price, condition, mileage, transmission,
@@ -189,7 +185,7 @@ const inquiryLimiter = rateLimit({
 // A visitor tapped "Ask the agent on WhatsApp". We note it so the agent sees interest.
 router.post("/shop/:slug/inquiries", inquiryLimiter, async (req, res) => {
   const site = await loadBySlug(req.params.slug);
-  if (!site || isOffline(site)) return res.status(404).json({ error: "Shop not found" });
+  if (!site || (await isOffline(site))) return res.status(404).json({ error: "Shop not found" });
 
   const propertyId = String(req.body.propertyId || "");
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(propertyId)) {
