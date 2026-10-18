@@ -22,10 +22,10 @@ async function countItems(siteId) {
 }
 
 // Works out where a shop stands from its dates and how many items it has.
-//  free      = 3 items or fewer, no payment needed, never locked
+//  free      = never paid and 3 items or fewer: no payment needed, never locked
 //  active    = paid plan running
 //  trial     = free trial running (30 days for real estate): add as many as you like
-//  locked    = more than 3 items and the plan ended: cannot add or edit
+//  locked    = a paid plan finished (or the trial ended with more than 3 items): cannot add or edit
 //  offline   = locked for more than 7 days: website hidden
 function billingStatus(site, items) {
   const now = Date.now();
@@ -34,7 +34,10 @@ function billingStatus(site, items) {
   if (paid > now) return "active";
   const trial = site.trial_ends_at ? new Date(site.trial_ends_at).getTime() : 0;
   if (trial > now) return "trial";
-  if ((Number(items) || 0) <= FREE_ITEMS) return "free";
+  // Someone who has never paid keeps their 3 free items.
+  // Once a paid plan has finished, there is no free fallback: everything is locked.
+  const everPaid = paid > 0;
+  if (!everPaid && (Number(items) || 0) <= FREE_ITEMS) return "free";
   const since = Math.max(trial, paid);
   if (since && now > since + OFFLINE_AFTER_DAYS * 24 * 60 * 60 * 1000) return "offline";
   return "locked";
@@ -59,7 +62,7 @@ async function requireActive(req, res, next) {
     return res.status(403).json({ error: "This account is on hold. Please contact support.", status });
   }
   if (status === "locked" || status === "offline") {
-    return res.status(402).json({ error: "Your plan has ended. Choose a plan to keep editing.", status });
+    return res.status(402).json({ error: "Subscription finished. Upgrade your website so you can make changes.", status });
   }
 
   req.site = site;
@@ -75,7 +78,7 @@ function requireRoom(req, res, next) {
   const open = req.billingStatus === "active" || req.billingStatus === "trial";
   if (!open && (req.items || 0) >= FREE_ITEMS) {
     return res.status(402).json({
-      error: `You have used your ${FREE_ITEMS} free items. Choose a plan to add more.`,
+      error: "Your free limit has ended. Pay to continue.",
       status: "limit",
     });
   }
