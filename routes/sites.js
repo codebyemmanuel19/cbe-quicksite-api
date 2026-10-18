@@ -1,7 +1,7 @@
 const express = require("express");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
-const { requireActive, billingStatus, countItems, FREE_ITEMS } = require("../middleware/locked");
+const { requireActive, billingStatus, countItems, FREE_ITEMS, TRIAL_DAYS } = require("../middleware/locked");
 const { isOurImage } = require("../images");
 const { COUNTRIES } = require("../countries");
 
@@ -156,11 +156,14 @@ router.post("/", requireAuth, async (req, res) => {
   if (!whatsapp) return res.status(400).json({ error: "Enter a valid WhatsApp number" });
 
   try {
+    // Real estate agents and car dealers get 30 free days with no limit on listings
+    const trialEnds = type === "realestate" || type === "cars" ? new Date(Date.now() + TRIAL_DAYS * 86400000) : null;
+
     const { rows } = await db.query(
-      `INSERT INTO sites (user_id, slug, business_type, country, currency, business_name, whatsapp)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO sites (user_id, slug, business_type, country, currency, business_name, whatsapp, trial_ends_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
-      [req.user.id, slug, type, country, info.currency, name, whatsapp]
+      [req.user.id, slug, type, country, info.currency, name, whatsapp, trialEnds]
     );
     res.status(201).json({ site: shapeSite(rows[0], await countItems(rows[0].id)) });
   } catch (err) {
