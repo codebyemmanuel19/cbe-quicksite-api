@@ -15,7 +15,8 @@ async function countItems(siteId) {
   const { rows } = await db.query(
     `SELECT ((SELECT COUNT(*) FROM products WHERE site_id = $1)
            + (SELECT COUNT(*) FROM properties WHERE site_id = $1)
-           + (SELECT COUNT(*) FROM cars WHERE site_id = $1))::int AS total`,
+           + (SELECT COUNT(*) FROM cars WHERE site_id = $1)
+           + (SELECT COUNT(*) FROM dishes WHERE site_id = $1))::int AS total`,
     [siteId]
   );
   return rows[0].total;

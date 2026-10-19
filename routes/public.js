@@ -173,6 +173,33 @@ router.get("/shop/:slug/cars", async (req, res) => {
   });
 });
 
+// ---- Restaurant ----
+
+router.get("/shop/:slug/dishes", async (req, res) => {
+  const site = await loadBySlug(req.params.slug);
+  if (!site || (await isOffline(site))) return res.status(404).json({ error: "Shop not found" });
+
+  const { rows } = await db.query(
+    `SELECT id, name, category, price, description, status, photo
+     FROM dishes
+     WHERE site_id = $1
+     ORDER BY created_at ASC`,
+    [site.id]
+  );
+
+  res.json({
+    dishes: rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      category: r.category,
+      price: Number(r.price),
+      description: r.description,
+      status: r.status,
+      photo: r.photo,
+    })),
+  });
+});
+
 // Stops one visitor filling the agent's inquiry list
 const inquiryLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
@@ -186,6 +213,19 @@ const inquiryLimiter = rateLimit({
 router.post("/shop/:slug/inquiries", inquiryLimiter, async (req, res) => {
   const site = await loadBySlug(req.params.slug);
   if (!site || (await isOffline(site))) return res.status(404).json({ error: "Shop not found" });
+
+  // Restaurants: the customer's order is saved so the owner sees it on the dashboard
+  if (site.business_type === "restaurant") {
+    const summary = String(req.body.propertyTitle || "").trim().slice(0, 600);
+    const name = String(req.body.name || "").trim().slice(0, 60);
+    if (!summary) return res.status(400).json({ error: "Empty order" });
+    await db.query("INSERT INTO dish_orders (site_id, summary, customer_name) VALUES ($1, $2, $3)", [
+      site.id,
+      summary,
+      name,
+    ]);
+    return res.status(201).json({ ok: true });
+  }
 
   const propertyId = String(req.body.propertyId || "");
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(propertyId)) {

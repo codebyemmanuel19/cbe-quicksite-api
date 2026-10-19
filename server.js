@@ -65,6 +65,7 @@ app.get("/health", async (req, res) => {
 // and changes also need a trial or a paid plan (lockWrites)
 app.use("/properties", requireVerified, lockWrites, limitFree, require("./routes/properties"));
 app.use("/cars", requireVerified, lockWrites, limitFree, require("./routes/cars"));
+app.use("/dishes", requireVerified, lockWrites, limitFree, require("./routes/dishes"));
 
 // Signup, login, logout, who am I, confirm code (these must work before confirming)
 app.use("/auth", require("./routes/auth"));
