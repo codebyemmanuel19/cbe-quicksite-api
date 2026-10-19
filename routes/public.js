@@ -180,7 +180,7 @@ router.get("/shop/:slug/dishes", async (req, res) => {
   if (!site || (await isOffline(site))) return res.status(404).json({ error: "Shop not found" });
 
   const { rows } = await db.query(
-    `SELECT id, name, category, price, description, status, photo
+    `SELECT id, name, category, price, description, status, photo, photos
      FROM dishes
      WHERE site_id = $1
      ORDER BY created_at ASC`,
@@ -195,7 +195,8 @@ router.get("/shop/:slug/dishes", async (req, res) => {
       price: Number(r.price),
       description: r.description,
       status: r.status,
-      photo: r.photo,
+      photo: (r.photos && r.photos[0]) || r.photo || "",
+      photos: r.photos && r.photos.length ? r.photos : r.photo ? [r.photo] : [],
     })),
   });
 });

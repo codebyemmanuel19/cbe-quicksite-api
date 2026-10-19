@@ -6,7 +6,7 @@ const { isOurImage } = require("../images");
 
 const router = express.Router();
 
-const CATEGORIES = ["Rice", "Soups & Swallow", "Grills", "Snacks", "Drinks", "Desserts"];
+const MAX_PHOTOS = 3;
 const STATUSES = ["Available", "Sold out"];
 const ORDER_STATUSES = ["new", "contacted", "closed"];
 const MAX_DISHES = 200;
@@ -25,7 +25,8 @@ function shape(row) {
     price: Number(row.price),
     description: row.description,
     status: row.status,
-    photo: row.photo,
+    photo: (row.photos && row.photos[0]) || row.photo || "",
+    photos: row.photos && row.photos.length ? row.photos : row.photo ? [row.photo] : [],
     createdAt: row.created_at,
   };
 }
@@ -37,16 +38,20 @@ function readBody(body) {
   const price = Number(body.price);
   if (!Number.isInteger(price) || price < 0 || price > 100000000) return { error: "Enter a valid price" };
 
-  const photo = String(body.photo || "").trim();
+  const list = Array.isArray(body.photos) ? body.photos : body.photo ? [body.photo] : [];
+  const photos = list.map((x) => String(x || "").trim()).filter(isOurImage).slice(0, MAX_PHOTOS);
+
+  // The owner makes their own sections: "Pizza", "Cakes", "Smoothies"...
+  const category = String(body.category || "").trim().replace(/\s+/g, " ").slice(0, 30) || "Menu";
 
   return {
     value: {
       name,
       price,
-      category: CATEGORIES.includes(body.category) ? body.category : "Rice",
+      category,
       status: STATUSES.includes(body.status) ? body.status : "Available",
       description: String(body.description || "").trim().slice(0, 200),
-      photo: photo && isOurImage(photo) ? photo : "",
+      photos,
     },
   };
 }
@@ -118,9 +123,9 @@ router.post("/", requireAuth, requireActive, async (req, res) => {
   const d = parsed.value;
 
   const { rows } = await db.query(
-    `INSERT INTO dishes (site_id, name, category, price, description, status, photo)
-     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-    [siteId, d.name, d.category, d.price, d.description, d.status, d.photo]
+    `INSERT INTO dishes (site_id, name, category, price, description, status, photo, photos)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+    [siteId, d.name, d.category, d.price, d.description, d.status, d.photos[0] || "", d.photos]
   );
   res.status(201).json({ dish: shape(rows[0]) });
 });
@@ -132,10 +137,10 @@ router.put("/:id", requireAuth, requireActive, async (req, res) => {
   const d = parsed.value;
 
   const { rows } = await db.query(
-    `UPDATE dishes SET name = $1, category = $2, price = $3, description = $4, status = $5, photo = $6,
+    `UPDATE dishes SET name = $1, category = $2, price = $3, description = $4, status = $5, photo = $6, photos = $7,
             updated_at = NOW()
-     WHERE id = $7 AND site_id = $8 RETURNING *`,
-    [d.name, d.category, d.price, d.description, d.status, d.photo, req.params.id, req.site.id]
+     WHERE id = $8 AND site_id = $9 RETURNING *`,
+    [d.name, d.category, d.price, d.description, d.status, d.photos[0] || "", d.photos, req.params.id, req.site.id]
   );
   if (!rows.length) return res.status(404).json({ error: "Dish not found" });
   res.json({ dish: shape(rows[0]) });
