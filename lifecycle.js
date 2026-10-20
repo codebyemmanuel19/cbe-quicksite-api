@@ -1,5 +1,6 @@
 // All the "journey" emails: which one a person should get, and what it says.
 const crypto = require("crypto");
+const { layout } = require("./mail");
 
 const DAY = 24 * 60 * 60 * 1000;
 const MIN_GAP_DAYS = 0.8; // never two emails to one person within ~20 hours
@@ -229,25 +230,14 @@ function content(key, c) {
 }
 
 function render({ subject, paras, button, link, unsubUrl }) {
-  const body = paras
-    .map((p) => `<p style="font-size:15px;line-height:1.6;color:#444;margin:0 0 14px">${p}</p>`)
-    .join("");
-
-  const cta = button
-    ? `<a href="${link}" style="display:inline-block;margin-top:10px;padding:14px 28px;background:#1d4ed8;color:#fff;text-decoration:none;border-radius:8px;font-size:15px;font-weight:600">${escapeHtml(button)}</a>`
-    : "";
-
-  return `
-    <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#111">
-      <h1 style="font-size:20px;margin:0 0 16px">${escapeHtml(subject)}</h1>
-      ${body}
-      ${cta}
-      <p style="font-size:12px;color:#999;margin:28px 0 0">CBE QuickSite</p>
-      <p style="font-size:12px;color:#999;margin:6px 0 0">
-        Do not want these emails? <a href="${unsubUrl}" style="color:#999">Unsubscribe</a>
-      </p>
-    </div>
-  `;
+  return layout({
+    title: subject,
+    badge: "CBE QuickSite",
+    paras,
+    button,
+    link,
+    unsubUrl,
+  });
 }
 
 // ctx: { name, businessType, hasSite, app, unsubUrl }

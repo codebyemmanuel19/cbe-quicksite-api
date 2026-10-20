@@ -67,6 +67,7 @@ app.use("/properties", requireVerified, lockWrites, limitFree, require("./routes
 app.use("/cars", requireVerified, lockWrites, limitFree, require("./routes/cars"));
 app.use("/dishes", requireVerified, lockWrites, limitFree, require("./routes/dishes"));
 app.use("/furniture", requireVerified, lockWrites, limitFree, require("./routes/furniture"));
+app.use("/ads", requireVerified, require("./routes/ads"));
 
 // Signup, login, logout, who am I, confirm code (these must work before confirming)
 app.use("/auth", require("./routes/auth"));

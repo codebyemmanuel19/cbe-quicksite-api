@@ -41,47 +41,70 @@ function escapeHtml(value) {
     .replace(/"/g, "&quot;");
 }
 
-// Plain, short and mobile-friendly. Long HTML emails land in spam.
-function resetEmail(link) {
+const BRAND = "#1d4ed8";
+const FONT = "-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif";
+
+// One look for every email: coloured header, small badge, greeting, text, button, sign-off, footer.
+// Pass `paras` as ready HTML (escape anything a user typed before it gets here).
+function layout({ title, badge, greeting, paras = [], extra = "", button, link, note, unsubUrl }) {
+  const body = paras
+    .map((p) => `<p style="font-size:16px;line-height:1.7;color:#374151;margin:0 0 16px">${p}</p>`)
+    .join("");
+
+  const cta =
+    button && link
+      ? `<a href="${link}" style="display:inline-block;margin:8px 0 6px;padding:15px 30px;background:${BRAND};color:#ffffff;text-decoration:none;border-radius:10px;font-size:16px;font-weight:700">${escapeHtml(button)}</a>`
+      : "";
+
   return `
-    <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#111">
-      <h1 style="font-size:20px;margin:0 0 16px">Reset your password</h1>
-      <p style="font-size:15px;line-height:1.6;color:#444;margin:0 0 24px">
-        Tap the button below to choose a new password. This link works once and expires in 1 hour.
-      </p>
-      <a href="${link}"
-         style="display:inline-block;padding:14px 28px;background:#1d4ed8;color:#fff;
-                text-decoration:none;border-radius:8px;font-size:15px;font-weight:600">
-        Reset password
-      </a>
-      <p style="font-size:13px;line-height:1.6;color:#777;margin:24px 0 0">
-        If you did not ask for this, you can ignore this email. Your password stays the same.
-      </p>
-      <p style="font-size:12px;color:#999;margin:24px 0 0">CBE QuickSite</p>
+  <div style="background:#f3f5fa;padding:24px 12px;font-family:${FONT}">
+    <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb">
+      <div style="background:${BRAND};padding:30px 28px">
+        <p style="margin:0 0 10px;font-size:13px;letter-spacing:2px;font-weight:700;color:#bfd0ff;text-transform:uppercase">CBE QuickSite</p>
+        <h1 style="margin:0;font-size:25px;line-height:1.3;color:#ffffff;font-weight:800">${escapeHtml(title)}</h1>
+      </div>
+      <div style="padding:28px">
+        ${badge ? `<span style="display:inline-block;margin:0 0 20px;padding:7px 14px;background:#e8efff;color:${BRAND};border-radius:999px;font-size:13px;font-weight:700">${escapeHtml(badge)}</span>` : ""}
+        ${greeting ? `<p style="font-size:16px;line-height:1.7;color:#111827;margin:0 0 16px">Hi ${escapeHtml(greeting)},</p>` : ""}
+        ${body}
+        ${extra}
+        ${cta}
+        ${note ? `<p style="font-size:13px;line-height:1.6;color:#6b7280;margin:14px 0 0">${note}</p>` : ""}
+        <p style="font-size:16px;line-height:1.6;color:#374151;margin:28px 0 0">Regards,<br><b style="color:#111827">The CBE QuickSite Team</b></p>
+        <div style="border-top:1px solid #e5e7eb;margin:26px 0 0;padding-top:16px">
+          <p style="font-size:12px;line-height:1.6;color:#9ca3af;margin:0">
+            You are receiving this email because you created a website on CBE QuickSite.
+            ${unsubUrl ? `<br>Do not want these emails? <a href="${unsubUrl}" style="color:#9ca3af">Unsubscribe</a>` : ""}
+          </p>
+        </div>
+      </div>
     </div>
-  `;
+  </div>`;
+}
+
+function resetEmail(link) {
+  return layout({
+    title: "Reset your password",
+    badge: "Password reset",
+    paras: ["Tap the button below to choose a new password. This link works once and expires in 1 hour."],
+    button: "Reset password",
+    link,
+    note: "If you did not ask for this, you can ignore this email. Your password stays the same.",
+  });
 }
 
 // Sent the moment someone signs up
 function verifyEmail(link) {
-  return `
-    <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#111">
-      <h1 style="font-size:20px;margin:0 0 16px">Confirm your email</h1>
-      <p style="font-size:15px;line-height:1.6;color:#444;margin:0 0 24px">
-        Welcome to CBE QuickSite. Tap the button below so we know this email is really yours.
-        That way you can always get back into your account.
-      </p>
-      <a href="${link}"
-         style="display:inline-block;padding:14px 28px;background:#1d4ed8;color:#fff;
-                text-decoration:none;border-radius:8px;font-size:15px;font-weight:600">
-        Confirm my email
-      </a>
-      <p style="font-size:13px;line-height:1.6;color:#777;margin:24px 0 0">
-        This link expires in 24 hours. If you did not create an account, you can ignore this email.
-      </p>
-      <p style="font-size:12px;color:#999;margin:24px 0 0">CBE QuickSite</p>
-    </div>
-  `;
+  return layout({
+    title: "Confirm your email",
+    badge: "One quick step",
+    paras: [
+      "Welcome to CBE QuickSite. Tap the button below so we know this email is really yours. That way you can always get back into your account.",
+    ],
+    button: "Confirm my email",
+    link,
+    note: "This link expires in 24 hours. If you did not create an account, you can ignore this email.",
+  });
 }
 
 // Sent when a plan or free trial is about to end
@@ -94,30 +117,23 @@ function reminderEmail({ name, kind, daysLeft, orders, total, symbol, link }) {
   const stats =
     orders > 0
       ? `Your website got <b>${orders} ${orders === 1 ? "order" : "orders"}</b> worth
-         <b>${escapeHtml(symbol)}${Number(total).toLocaleString("en-US")}</b> in the last 30 days.
-         Keep it going.`
-      : `Keep your website active so customers can keep ordering.`;
+         <b>${escapeHtml(symbol)}${Number(total).toLocaleString("en-US")}</b> in the last 30 days. Keep it going.`
+      : "Keep your website active so customers can keep reaching you.";
 
   const extra =
     kind === "plan"
       ? "Paying early never loses you days."
-      : "After your trial ends, you will not be able to edit your website until you pay.";
+      : "After it ends, you will not be able to edit your website until you pay.";
 
-  const button = kind === "plan" ? "Renew now" : "Pay to continue";
-
-  return `
-    <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#111">
-      <h1 style="font-size:20px;margin:0 0 16px">${escapeHtml(name)}, your ${what} ends ${when}</h1>
-      <p style="font-size:15px;line-height:1.6;color:#444;margin:0 0 12px">${stats}</p>
-      <p style="font-size:15px;line-height:1.6;color:#444;margin:0 0 24px">${extra}</p>
-      <a href="${link}"
-         style="display:inline-block;padding:14px 28px;background:#1d4ed8;color:#fff;
-                text-decoration:none;border-radius:8px;font-size:15px;font-weight:600">
-        ${button}
-      </a>
-      <p style="font-size:12px;color:#999;margin:24px 0 0">CBE QuickSite</p>
-    </div>
-  `;
+  return layout({
+    title: `Your ${what} ends ${when}`,
+    badge: kind === "plan" ? "Renewal reminder" : "Subscription needed",
+    greeting: name,
+    paras: [stats, extra],
+    button: kind === "plan" ? "Renew now" : "Pay to continue",
+    link,
+    note: "If you have already renewed, no action is needed.",
+  });
 }
 
 function naira(symbol, amount) {
@@ -144,36 +160,27 @@ function newOrderEmail({ shop, number, customer, phone, items, total, symbol, de
 
   const digits = String(phone || "").replace(/\D/g, "");
 
-  return `
-    <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#111">
-      <h1 style="font-size:20px;margin:0 0 6px">New order #${Number(number)}</h1>
-      <p style="font-size:14px;color:#666;margin:0 0 18px">${escapeHtml(shop)}</p>
+  const details = `
+    <p style="font-size:16px;line-height:1.6;margin:0 0 2px;color:#111827"><b>${escapeHtml(customer)}</b></p>
+    <p style="font-size:15px;line-height:1.6;margin:0 0 16px"><a href="https://wa.me/${digits}" style="color:${BRAND}">+${digits}</a></p>
+    <table style="width:100%;border-collapse:collapse;border-top:1px solid #e5e7eb;border-bottom:1px solid #e5e7eb;margin:0 0 16px">
+      ${rows}
+      <tr>
+        <td style="padding:10px 0 6px;font-size:16px;font-weight:700">Total</td>
+        <td style="padding:10px 0 6px;font-size:16px;font-weight:700;text-align:right">${naira(symbol, total)}</td>
+      </tr>
+    </table>
+    <p style="font-size:15px;line-height:1.6;color:#374151;margin:0 0 4px">${escapeHtml(delivery)}</p>
+    <p style="font-size:15px;line-height:1.6;color:#374151;margin:0 0 16px">${escapeHtml(payment)}</p>
+    ${note ? `<p style="font-size:15px;line-height:1.6;color:#374151;margin:0 0 16px">Note: ${escapeHtml(note)}</p>` : ""}`;
 
-      <p style="font-size:15px;line-height:1.6;margin:0 0 4px"><b>${escapeHtml(customer)}</b></p>
-      <p style="font-size:14px;line-height:1.6;color:#444;margin:0 0 16px">
-        <a href="https://wa.me/${digits}" style="color:#1d4ed8">+${digits}</a>
-      </p>
-
-      <table style="width:100%;border-collapse:collapse;border-top:1px solid #eee;border-bottom:1px solid #eee;margin:0 0 14px">
-        ${rows}
-        <tr>
-          <td style="padding:10px 0 6px;font-size:15px;font-weight:700">Total</td>
-          <td style="padding:10px 0 6px;font-size:15px;font-weight:700;text-align:right">${naira(symbol, total)}</td>
-        </tr>
-      </table>
-
-      <p style="font-size:14px;line-height:1.6;color:#444;margin:0 0 4px">${escapeHtml(delivery)}</p>
-      <p style="font-size:14px;line-height:1.6;color:#444;margin:0 0 16px">${escapeHtml(payment)}</p>
-      ${note ? `<p style="font-size:14px;line-height:1.6;color:#444;margin:0 0 16px">Note: ${escapeHtml(note)}</p>` : ""}
-
-      <a href="${link}"
-         style="display:inline-block;padding:14px 28px;background:#1d4ed8;color:#fff;
-                text-decoration:none;border-radius:8px;font-size:15px;font-weight:600">
-        View order
-      </a>
-      <p style="font-size:12px;color:#999;margin:24px 0 0">CBE QuickSite</p>
-    </div>
-  `;
+  return layout({
+    title: `New order #${Number(number)}`,
+    badge: shop,
+    extra: details,
+    button: "View order",
+    link,
+  });
 }
 
-module.exports = { send, resetEmail, verifyEmail, reminderEmail, newOrderEmail };
+module.exports = { layout, send, resetEmail, verifyEmail, reminderEmail, newOrderEmail };
