@@ -66,6 +66,7 @@ app.get("/health", async (req, res) => {
 app.use("/properties", requireVerified, lockWrites, limitFree, require("./routes/properties"));
 app.use("/cars", requireVerified, lockWrites, limitFree, require("./routes/cars"));
 app.use("/dishes", requireVerified, lockWrites, limitFree, require("./routes/dishes"));
+app.use("/furniture", requireVerified, lockWrites, limitFree, require("./routes/furniture"));
 
 // Signup, login, logout, who am I, confirm code (these must work before confirming)
 app.use("/auth", require("./routes/auth"));

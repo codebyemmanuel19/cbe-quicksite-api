@@ -209,6 +209,35 @@ router.get("/shop/:slug/dishes", async (req, res) => {
   });
 });
 
+// ---- Furniture ----
+
+router.get("/shop/:slug/furniture", async (req, res) => {
+  const site = await loadBySlug(req.params.slug);
+  if (!site || (await isOffline(site))) return res.status(404).json({ error: "Shop not found" });
+
+  const { rows } = await db.query(
+    `SELECT id, name, category, price, dimensions, material, color, availability, status, description, photos
+     FROM furniture WHERE site_id = $1 ORDER BY created_at DESC`,
+    [site.id]
+  );
+
+  res.json({
+    items: rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      category: r.category,
+      price: Number(r.price),
+      dimensions: r.dimensions,
+      material: r.material,
+      color: r.color,
+      availability: r.availability,
+      status: r.status,
+      description: r.description,
+      photos: r.photos || [],
+    })),
+  });
+});
+
 // Stops one visitor filling the agent's inquiry list
 const inquiryLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
@@ -237,6 +266,24 @@ router.post("/shop/:slug/inquiries", inquiryLimiter, async (req, res) => {
   }
 
   const propertyId = String(req.body.propertyId || "");
+
+  // Furniture: same button. The title still comes from the database.
+  if (site.business_type === "furniture") {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(propertyId)) {
+      return res.status(400).json({ error: "Piece not found" });
+    }
+    const { rows: piece } = await db.query("SELECT name FROM furniture WHERE id = $1 AND site_id = $2", [
+      propertyId,
+      site.id,
+    ]);
+    if (!piece.length) return res.status(404).json({ error: "Piece not found" });
+    await db.query("INSERT INTO furniture_inquiries (site_id, item_id, item_title) VALUES ($1, $2, $3)", [
+      site.id,
+      propertyId,
+      piece[0].name,
+    ]);
+    return res.status(201).json({ ok: true });
+  }
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(propertyId)) {
     return res.status(400).json({ error: "Property not found" });
   }
