@@ -30,6 +30,7 @@ function shape(row) {
     variants: row.variants || [],
     tag: row.tag,
     soldOut: row.sold_out,
+    stock: row.stock,
     categoryId: row.category_id,
     category: row.category_name || "",
     createdAt: row.created_at,
@@ -88,6 +89,15 @@ async function readBody(body, siteId) {
     return { error: "Enter a valid price" };
   }
 
+  // Empty = not counting stock. A number = how many are left.
+  let stock = null;
+  if (body.stock !== "" && body.stock !== null && body.stock !== undefined) {
+    stock = Number(body.stock);
+    if (!Number.isInteger(stock) || stock < 0 || stock > 100000) {
+      return { error: "Stock must be a whole number" };
+    }
+  }
+
   const variants = cleanVariants(body.variants);
   if (variants.error) return { error: variants.error };
 
@@ -109,7 +119,9 @@ async function readBody(body, siteId) {
       categoryId,
       description: String(body.description || "").trim().slice(0, 1000),
       tag: TAGS.includes(body.tag) ? body.tag : "",
-      soldOut: body.soldOut === true,
+      stock,
+      // When stock is counted, 0 means sold out and anything above 0 is available
+      soldOut: stock === null ? body.soldOut === true : stock === 0,
       photos: cleanPhotos(body.photos),
       sizes: cleanOptions(body.sizes),
       colors: cleanOptions(body.colors),
@@ -149,8 +161,8 @@ router.post("/", requireAuth, requireActive, async (req, res) => {
   const p = parsed.value;
 
   const { rows } = await db.query(
-    `INSERT INTO products (site_id, category_id, name, price, description, photos, sizes, colors, variants, tag, sold_out)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)
+    `INSERT INTO products (site_id, category_id, name, price, description, photos, sizes, colors, variants, tag, sold_out, stock)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12)
      RETURNING *`,
     [
       siteId,
@@ -164,6 +176,7 @@ router.post("/", requireAuth, requireActive, async (req, res) => {
       JSON.stringify(p.variants),
       p.tag,
       p.soldOut,
+      p.stock,
     ]
   );
 
@@ -193,8 +206,8 @@ router.put("/:id", requireAuth, requireActive, async (req, res) => {
   const { rows } = await db.query(
     `UPDATE products
      SET category_id = $1, name = $2, price = $3, description = $4, photos = $5,
-         sizes = $6, colors = $7, variants = $8::jsonb, tag = $9, sold_out = $10, updated_at = NOW()
-     WHERE id = $11 AND site_id = $12
+         sizes = $6, colors = $7, variants = $8::jsonb, tag = $9, sold_out = $10, stock = $11, updated_at = NOW()
+     WHERE id = $12 AND site_id = $13
      RETURNING *`,
     [
       p.categoryId,
@@ -207,6 +220,7 @@ router.put("/:id", requireAuth, requireActive, async (req, res) => {
       JSON.stringify(p.variants),
       p.tag,
       p.soldOut,
+      p.stock,
       req.params.id,
       siteId,
     ]
