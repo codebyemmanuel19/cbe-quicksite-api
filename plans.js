@@ -3,8 +3,8 @@
 // What one month costs, by business type
 const MONTHLY = {
   default: 7999,
-  realestate: 10000,
-  cars: 10000,
+  realestate: 9999,
+  cars: 9999,
 };
 
 // Every business type gets the same plan shape. Only the amount changes.

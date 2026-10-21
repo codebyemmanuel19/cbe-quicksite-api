@@ -1,5 +1,6 @@
 const db = require("./db");
 const { PLANS } = require("./plans");
+const { send, paymentEmail } = require("./mail");
 
 // Same cleaning as routes/billing.js: a stray space or quote mark in .env breaks the header
 function secretKey() {
@@ -12,6 +13,34 @@ async function askPaystack(reference) {
   });
   const body = await res.json();
   return body && body.data ? body.data : null;
+}
+
+// The thank-you email. It runs after the money is safely saved, so a failed email can never undo a payment.
+async function sendReceipt(siteId, months, paidUntil) {
+  try {
+    const { rows } = await db.query(
+      `SELECT s.business_name, u.email
+       FROM sites s JOIN users u ON u.id = s.user_id WHERE s.id = $1`,
+      [siteId]
+    );
+    if (!rows[0] || !rows[0].email) return;
+
+    const app = (process.env.CLIENT_URL || "").split(",")[0].trim() || "https://cbequicksite.com";
+    const until = new Date(paidUntil).toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      timeZone: "Africa/Lagos",
+    });
+
+    await send({
+      to: rows[0].email,
+      subject: "Payment received. Thank you!",
+      html: paymentEmail({ name: rows[0].business_name, months, until, link: `${app}/dashboard` }),
+    });
+  } catch (err) {
+    console.error("Could not send the payment email:", err.message);
+  }
 }
 
 // Safe to call twice (once from the browser, once from the webhook).
@@ -70,6 +99,10 @@ async function creditPayment(reference) {
     );
 
     await client.query("COMMIT");
+
+    // Only the call that really credited the days sends the email, so nobody gets it twice
+    await sendReceipt(payment.site_id, payment.months, siteRows[0].paid_until);
+
     return { ok: true, days: plan.days, paidUntil: siteRows[0].paid_until };
   } catch (err) {
     await client.query("ROLLBACK");
