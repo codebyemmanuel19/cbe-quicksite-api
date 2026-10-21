@@ -107,32 +107,47 @@ function verifyEmail(link) {
   });
 }
 
-// Sent when a plan or free trial is about to end
+// Sent when a plan or free trial is about to end (5 days and 1 day before)
 function reminderEmail({ name, kind, daysLeft, orders, total, symbol, link }) {
-  const what = kind === "plan" ? "plan" : "free trial";
   const word = daysLeft === 1 ? "day" : "days";
-  // The free trial is only 24 hours, so we say "in a few hours" instead of counting days
-  const when = kind === "plan" ? `in ${daysLeft} ${word}` : "in a few hours";
+  const when = daysLeft <= 1 ? "tomorrow" : `in ${daysLeft} ${word}`;
+  const what = kind === "plan" ? "plan" : "free trial";
 
   const stats =
     orders > 0
       ? `Your website got <b>${orders} ${orders === 1 ? "order" : "orders"}</b> worth
          <b>${escapeHtml(symbol)}${Number(total).toLocaleString("en-US")}</b> in the last 30 days. Keep it going.`
-      : "Keep your website active so customers can keep reaching you.";
+      : "Keep your website active so customers can keep finding you.";
 
   const extra =
     kind === "plan"
-      ? "Paying early never loses you days."
-      : "After it ends, you will not be able to edit your website until you pay.";
+      ? "Renew early and you never lose a day."
+      : "After your trial ends, you will not be able to edit your website until you choose a plan.";
 
   return layout({
     title: `Your ${what} ends ${when}`,
-    badge: kind === "plan" ? "Renewal reminder" : "Subscription needed",
+    badge: kind === "plan" ? "Renewal reminder" : "Trial ending soon",
     greeting: name,
     paras: [stats, extra],
-    button: kind === "plan" ? "Renew now" : "Pay to continue",
+    button: kind === "plan" ? "Renew now" : "Choose a plan",
     link,
     note: "If you have already renewed, no action is needed.",
+  });
+}
+
+// Sent the moment a payment goes through
+function paymentEmail({ name, months, until, link }) {
+  const label = months === 1 ? "1 month" : `${months} months`;
+  return layout({
+    title: "Payment received. Thank you!",
+    badge: "Website active",
+    greeting: name,
+    paras: [
+      `We received your payment for <b>${label}</b>. Your website is active until <b>${escapeHtml(until)}</b>.`,
+      "You can add and edit products again, and your customers can see everything.",
+    ],
+    button: "Open my dashboard",
+    link,
   });
 }
 
@@ -183,4 +198,4 @@ function newOrderEmail({ shop, number, customer, phone, items, total, symbol, de
   });
 }
 
-module.exports = { layout, send, resetEmail, verifyEmail, reminderEmail, newOrderEmail };
+module.exports = { layout, paymentEmail, send, resetEmail, verifyEmail, reminderEmail, newOrderEmail };

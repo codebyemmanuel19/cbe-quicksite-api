@@ -2,7 +2,7 @@ const express = require("express");
 const crypto = require("crypto");
 const db = require("../db");
 const { send, reminderEmail } = require("../mail");
-const { pick, buildEmail, unsubToken } = require("../lifecycle");
+const { pick, buildEmail, unsubToken, describe } = require("../lifecycle");
 const { COUNTRIES } = require("../countries");
 
 const router = express.Router();
@@ -11,11 +11,8 @@ const DAY = 24 * 60 * 60 * 1000;
 const MAX_PER_RUN = 40;
 const MAX_LIFECYCLE_PER_RUN = 25;
 
-// A paid plan is reminded at 5 days and at 1 day left.
-// The free trial is short (24 hours), so it gets ONE reminder, 6 hours before it ends.
+// A paid plan and a free trial are both reminded at 5 days and at 1 day left.
 const PLAN_STAGES = [5, 1];
-const TRIAL_REMIND_HOURS = 6;
-const HOUR = 60 * 60 * 1000;
 
 // Remembers what each shop was already emailed about. Safe to run every time.
 db.query("ALTER TABLE sites ADD COLUMN IF NOT EXISTS last_reminder TEXT").catch((err) =>
@@ -81,7 +78,11 @@ router.post("/reminders", async (req, res) => {
        JOIN users u ON u.id = s.user_id
        WHERE s.is_suspended IS NOT TRUE
          AND u.email_verified_at IS NOT NULL
-         AND s.paid_until > NOW() AND s.paid_until < NOW() + INTERVAL '5 days'
+         AND (
+           (s.paid_until > NOW() AND s.paid_until < NOW() + INTERVAL '5 days')
+           OR (COALESCE(s.paid_until, 'epoch') <= NOW()
+               AND s.trial_ends_at > NOW() AND s.trial_ends_at < NOW() + INTERVAL '5 days')
+         )
        LIMIT 200`
     );
 
@@ -96,13 +97,7 @@ router.post("/reminders", async (req, res) => {
       const end = new Date(paidActive ? s.paid_until : s.trial_ends_at);
       const daysLeft = Math.ceil((end.getTime() - now) / DAY);
 
-      let stage;
-      if (kind === "plan") {
-        stage = PLAN_STAGES.filter((x) => daysLeft <= x).pop();
-      } else {
-        const hoursLeft = (end.getTime() - now) / HOUR;
-        stage = hoursLeft <= TRIAL_REMIND_HOURS ? TRIAL_REMIND_HOURS : undefined;
-      }
+      const stage = PLAN_STAGES.filter((x) => daysLeft <= x).pop();
       if (!stage || !s.owner_email) {
         skipped++;
         continue;
@@ -139,8 +134,8 @@ router.post("/reminders", async (req, res) => {
         to: s.owner_email,
         subject:
           kind === "plan"
-            ? `Your ${what} ends in ${daysLeft} ${daysLeft === 1 ? "day" : "days"}`
-            : "Your free trial ends in a few hours",
+            ? `Your ${what} ends ${daysLeft <= 1 ? "tomorrow" : `in ${daysLeft} days`}`
+            : `Your free trial ends ${daysLeft <= 1 ? "tomorrow" : `in ${daysLeft} days`}`,
         html: reminderEmail({
           name: s.business_name,
           kind,
@@ -196,18 +191,19 @@ router.post("/lifecycle", async (req, res) => {
     const apiBase = `https://${req.get("host")}`;
 
     const { rows } = await db.query(
-      `SELECT u.id, u.email, u.created_at, u.installed_at,
+      `SELECT u.id, u.email, u.created_at, u.installed_at, u.unsubscribed_at,
               s.id AS site_id, s.slug, s.business_name, s.business_type,
               s.trial_ends_at, s.paid_until,
               ((SELECT COUNT(*) FROM products p WHERE p.site_id = s.id)
                + (SELECT COUNT(*) FROM properties r WHERE r.site_id = s.id)
-               + (SELECT COUNT(*) FROM cars cr WHERE cr.site_id = s.id))::int AS items,
+               + (SELECT COUNT(*) FROM cars cr WHERE cr.site_id = s.id)
+               + (SELECT COUNT(*) FROM dishes dh WHERE dh.site_id = s.id)
+               + (SELECT COUNT(*) FROM furniture fu WHERE fu.site_id = s.id))::int AS items,
               COALESCE((SELECT array_agg(l.key) FROM email_log l WHERE l.user_id = u.id::text), '{}') AS sent,
               (SELECT MAX(l.sent_at) FROM email_log l WHERE l.user_id = u.id::text) AS last_sent
        FROM users u
        LEFT JOIN sites s ON s.user_id = u.id
-       WHERE u.unsubscribed_at IS NULL
-         AND u.email_verified_at IS NOT NULL
+       WHERE u.email_verified_at IS NOT NULL
          AND u.created_at >= $1
          AND (s.id IS NULL OR s.is_suspended IS NOT TRUE)
        ORDER BY u.created_at ASC
@@ -233,10 +229,13 @@ router.post("/lifecycle", async (req, res) => {
       }
       if (sent >= MAX_LIFECYCLE_PER_RUN) break;
 
+      const info = describe(u);
       const mail = buildEmail(key, {
         name: u.business_name,
         businessType: u.business_type,
         hasSite: !!u.site_id,
+        status: info.status,
+        since: info.since,
         app: appUrl(),
         unsubUrl: `${apiBase}/cron/unsubscribe?u=${encodeURIComponent(u.id)}&t=${unsubToken(u.id)}`,
       });

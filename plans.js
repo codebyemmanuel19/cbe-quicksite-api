@@ -2,7 +2,7 @@
 
 // What one month costs, by business type
 const MONTHLY = {
-  default: 5000,
+  default: 7999,
   realestate: 10000,
   cars: 10000,
 };
@@ -16,8 +16,17 @@ const SHAPE = [
   { id: "12m", months: 12, days: 365, label: "1 year", multiplier: 9 },
 ];
 
-function plansFor(businessType) {
-  const monthly = MONTHLY[businessType] || MONTHLY.default;
+// Prices that end in 99 are rounded to the nearest 100 minus 1, so 3 months is 21,599, not 21,597.
+function tidy(amount, monthly) {
+  if (monthly % 100 !== 99) return Math.round(amount);
+  return Math.round(amount / 100) * 100 - 1;
+}
+
+// `lockedMonthly` is the price a shop was promised when it joined (sites.price_monthly).
+// Early vendors keep it for as long as they stay subscribed.
+function plansFor(businessType, lockedMonthly) {
+  const custom = Number(lockedMonthly);
+  const monthly = custom > 0 ? custom : MONTHLY[businessType] || MONTHLY.default;
 
   const out = {};
   for (const p of SHAPE) {
@@ -26,7 +35,7 @@ function plansFor(businessType) {
       months: p.months,
       days: p.days,
       label: p.label,
-      amount: Math.round(monthly * p.multiplier),
+      amount: tidy(monthly * p.multiplier, monthly),
     };
   }
   return out;

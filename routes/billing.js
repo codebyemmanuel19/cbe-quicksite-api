@@ -1,5 +1,5 @@
 const express = require("express");
-const crypto = require("crypto"); 
+const crypto = require("crypto");
 const db = require("../db");
 const { requireAuth } = require("../middleware/auth");
 const { statusFor, FREE_ITEMS } = require("../middleware/locked");
@@ -12,7 +12,7 @@ function firstClientUrl() {
   return (process.env.CLIENT_URL || "http://localhost:3000").split(",")[0].trim();
 }
 
-// A stray space or  quote mark in .env breaks the header without saying why
+// A stray space or quote mark in .env breaks the header without saying why
 function secretKey() {
   return String(process.env.PAYSTACK_SECRET_KEY || "").trim().replace(/^["']|["']$/g, "");
 }
@@ -55,7 +55,7 @@ router.get("/status", requireAuth, async (req, res) => {
       freeItems: FREE_ITEMS,
     },
     // The price depends on the kind of business, so the shop has to be loaded first
-    plans: Object.values(plansFor(site.business_type)),
+    plans: Object.values(plansFor(site.business_type, site.price_monthly)),
     history,
   });
 });
@@ -66,7 +66,7 @@ router.post("/initialize", requireAuth, async (req, res) => {
   if (site.is_suspended) return res.status(403).json({ error: "This account is on hold. Please contact support." });
 
   // Looked up after the shop, so a real estate agent is charged the real estate price
-  const plan = plansFor(site.business_type)[String(req.body.plan || "")];
+  const plan = plansFor(site.business_type, site.price_monthly)[String(req.body.plan || "")];
   if (!plan) return res.status(400).json({ error: "Choose a plan" });
 
   if (!secretKey()) {
