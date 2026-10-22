@@ -29,6 +29,15 @@ router.get("/shop/:slug", async (req, res) => {
 
   const money = COUNTRIES[site.country] || COUNTRIES.NG;
 
+  // Count the visit for the owner's weekly email. Never slows the page, never breaks it.
+  if (!/bot|crawl|spider|preview|facebookexternalhit|whatsapp/i.test(req.get("user-agent") || "")) {
+    db.query(
+      `INSERT INTO shop_visits (site_id, day, visits) VALUES ($1, CURRENT_DATE, 1)
+       ON CONFLICT (site_id, day) DO UPDATE SET visits = shop_visits.visits + 1`,
+      [site.id]
+    ).catch(() => {});
+  }
+
   const { rows: categories } = await db.query(
     "SELECT id, name FROM categories WHERE site_id = $1 ORDER BY position, name",
     [site.id]

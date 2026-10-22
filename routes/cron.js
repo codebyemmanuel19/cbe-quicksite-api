@@ -4,6 +4,7 @@ const db = require("../db");
 const { send, reminderEmail } = require("../mail");
 const { pick, buildEmail, unsubToken, describe } = require("../lifecycle");
 const { COUNTRIES } = require("../countries");
+const { weeklyEmail } = require("../weekly");
 
 const router = express.Router();
 
@@ -277,6 +278,164 @@ router.post("/lifecycle", async (req, res) => {
   } catch (err) {
     console.error("Lifecycle job failed:", err);
     res.status(500).json({ ok: false, error: "Lifecycle job failed" });
+  }
+});
+
+// Monday morning in Lagos (UTC+1). Returns that Monday's date, or "" on other days and before 9am.
+function lagosMonday(now) {
+  const t = new Date(now + 60 * 60 * 1000);
+  return t.getUTCDay() === 1 && t.getUTCHours() >= 9 ? t.toISOString().slice(0, 10) : "";
+}
+
+// Counts per shop from one table. If a table or column is missing, it just returns nothing.
+async function countsBy(sql) {
+  try {
+    const { rows } = await db.query(sql);
+    const map = new Map();
+    rows.forEach((r) => map.set(String(r.site_id), r));
+    return map;
+  } catch (err) {
+    console.error("Weekly count skipped:", err.message);
+    return new Map();
+  }
+}
+
+// POST /cron/weekly  (header: x-cron-secret)
+// Set it to run every 10 minutes on Mondays, 08:00 to 10:00 UTC. It only sends after 9am Lagos time
+// and never twice in the same week. Add ?dry=1 to see who would get an email.
+router.post("/weekly", async (req, res) => {
+  if (!secretOk(req)) return res.status(404).json({ error: "Not found" });
+
+  try {
+    await lifecycleReady;
+
+    const dry = req.query.dry === "1";
+    const now = Date.now();
+    const monday = lagosMonday(now);
+    if (!monday && !dry) return res.json({ ok: true, note: "Not Monday morning yet" });
+
+    const key = `weekly:${monday || new Date(now).toISOString().slice(0, 10)}`;
+    const apiBase = `https://${req.get("host")}`;
+
+    const { rows } = await db.query(
+      `SELECT u.id, u.email, s.id AS site_id, s.slug, s.business_name, s.business_type, s.country, s.currency,
+              s.trial_ends_at, s.paid_until,
+              ((SELECT COUNT(*) FROM products p WHERE p.site_id = s.id)
+               + (SELECT COUNT(*) FROM properties r WHERE r.site_id = s.id)
+               + (SELECT COUNT(*) FROM cars cr WHERE cr.site_id = s.id)
+               + (SELECT COUNT(*) FROM dishes dh WHERE dh.site_id = s.id)
+               + (SELECT COUNT(*) FROM furniture fu WHERE fu.site_id = s.id))::int AS items
+       FROM users u
+       JOIN sites s ON s.user_id = u.id
+       WHERE u.email_verified_at IS NOT NULL
+         AND u.unsubscribed_at IS NULL
+         AND s.is_suspended IS NOT TRUE
+         AND NOT EXISTS (SELECT 1 FROM email_log l WHERE l.user_id = u.id::text AND l.key = $1)
+       ORDER BY u.created_at ASC
+       LIMIT 500`,
+      [key]
+    );
+
+    // Only shops that are live, and only ones with something on them
+    const eligible = rows.filter((u) => {
+      const { status } = describe(u);
+      return ["free", "trial", "active"].includes(status) && Number(u.items) > 0 && u.email;
+    });
+
+    const ids = eligible.map((u) => `'${String(u.site_id).replace(/[^0-9a-f-]/gi, "")}'`).join(",") || "NULL";
+
+    const [visits, prevVisits, orders, dishOrders, propInq, carInq, furnInq, stock] = await Promise.all([
+      countsBy(`SELECT site_id, SUM(visits)::int AS n FROM shop_visits
+                WHERE site_id IN (${ids}) AND day >= CURRENT_DATE - 7 AND day < CURRENT_DATE GROUP BY site_id`),
+      countsBy(`SELECT site_id, SUM(visits)::int AS n FROM shop_visits
+                WHERE site_id IN (${ids}) AND day >= CURRENT_DATE - 14 AND day < CURRENT_DATE - 7 GROUP BY site_id`),
+      countsBy(`SELECT site_id, COUNT(*)::int AS n, COALESCE(SUM(total), 0)::bigint AS total FROM orders
+                WHERE site_id IN (${ids}) AND status <> 'cancelled' AND created_at > NOW() - INTERVAL '7 days' GROUP BY site_id`),
+      countsBy(`SELECT site_id, COUNT(*)::int AS n FROM dish_orders
+                WHERE site_id IN (${ids}) AND created_at > NOW() - INTERVAL '7 days' GROUP BY site_id`),
+      countsBy(`SELECT site_id, COUNT(*)::int AS n FROM inquiries
+                WHERE site_id IN (${ids}) AND created_at > NOW() - INTERVAL '7 days' GROUP BY site_id`),
+      countsBy(`SELECT site_id, COUNT(*)::int AS n FROM car_inquiries
+                WHERE site_id IN (${ids}) AND created_at > NOW() - INTERVAL '7 days' GROUP BY site_id`),
+      countsBy(`SELECT site_id, COUNT(*)::int AS n FROM furniture_inquiries
+                WHERE site_id IN (${ids}) AND created_at > NOW() - INTERVAL '7 days' GROUP BY site_id`),
+      countsBy(`SELECT site_id, COUNT(*)::int AS n FROM products
+                WHERE site_id IN (${ids}) AND stock IS NOT NULL AND stock > 0 AND stock <= 3 GROUP BY site_id`),
+    ]);
+
+    let sent = 0;
+    let skipped = rows.length - eligible.length;
+    let failed = 0;
+    const wouldSend = [];
+
+    for (const u of eligible) {
+      const id = String(u.site_id);
+      const type = u.business_type;
+      const o = orders.get(id);
+
+      let leads = 0;
+      let revenue = 0;
+      if (type === "restaurant") leads = Number(dishOrders.get(id)?.n) || 0;
+      else if (type === "realestate") leads = Number(propInq.get(id)?.n) || 0;
+      else if (type === "cars") leads = Number(carInq.get(id)?.n) || 0;
+      else if (type === "furniture") leads = Number(furnInq.get(id)?.n) || 0;
+      else {
+        leads = Number(o?.n) || 0;
+        revenue = Number(o?.total) || 0;
+      }
+
+      if (dry) {
+        wouldSend.push({ email: u.email, visits: Number(visits.get(id)?.n) || 0, leads });
+        continue;
+      }
+      if (sent >= MAX_LIFECYCLE_PER_RUN) break;
+
+      const money = COUNTRIES[u.country] || COUNTRIES.NG || {};
+      const mail = weeklyEmail({
+        name: u.business_name,
+        businessType: type,
+        visits: Number(visits.get(id)?.n) || 0,
+        prevVisits: Number(prevVisits.get(id)?.n) || 0,
+        leads,
+        revenue,
+        lowStock: Number(stock.get(id)?.n) || 0,
+        symbol: money.symbol || `${u.currency || ""} `,
+        shopUrl: `${u.slug}.cbequicksite.com`,
+        link: `${appUrl()}/dashboard`,
+        unsubUrl: `${apiBase}/cron/unsubscribe?u=${encodeURIComponent(u.id)}&t=${unsubToken(u.id)}`,
+      });
+
+      // Claim it first, so two runs at the same time can never send twice
+      const claim = await db.query(
+        "INSERT INTO email_log (user_id, key) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING id",
+        [String(u.id), key]
+      );
+      if (!claim.rows.length) {
+        skipped++;
+        continue;
+      }
+
+      const visitCount = Number(visits.get(id)?.n) || 0;
+      const subject =
+        visitCount > 0
+          ? `Your week: ${visitCount} ${visitCount === 1 ? "visit" : "visits"} and ${leads} ${leads === 1 ? (["realestate", "cars", "furniture"].includes(type) ? "inquiry" : "order") : ["realestate", "cars", "furniture"].includes(type) ? "inquiries" : "orders"}`
+          : "Your week on CBE QuickSite";
+
+      const result = await send({ to: u.email, subject, html: mail });
+      if (result.ok) {
+        sent++;
+      } else {
+        failed++;
+        await db.query("DELETE FROM email_log WHERE user_id = $1 AND key = $2", [String(u.id), key]);
+      }
+
+      await sleep(600); // Resend allows only a couple of emails per second
+    }
+
+    res.json({ ok: true, checked: rows.length, sent, skipped, failed, wouldSend: dry ? wouldSend : undefined });
+  } catch (err) {
+    console.error("Weekly job failed:", err);
+    res.status(500).json({ ok: false, error: "Weekly job failed" });
   }
 });
 
